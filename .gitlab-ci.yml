@@ -2,7 +2,7 @@ stages:
   - docker-build
 
 variables:
-  DOCKER_IMAGE_TAG: $CI_REGISTRY_IMAGE/maven-docker:latest
+  DOCKER_IMAGE_VERSIONED: $CI_REGISTRY_IMAGE/maven-docker:${CI_COMMIT_SHORT_SHA}
 
 docker-build-maven-image:
   stage: docker-build
@@ -12,12 +12,11 @@ docker-build-maven-image:
   before_script:
     - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" "$CI_REGISTRY"
   script:
-    - docker build -t "$DOCKER_IMAGE_TAG" .
-    - docker push "$DOCKER_IMAGE_TAG"
+    - docker build -t "$DOCKER_IMAGE_VERSIONED" .
+    - docker push "$DOCKER_IMAGE_VERSIONED"
   rules:
-    - changes:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "master"'
+      changes:
         - Dockerfile
-    - when: manual  # allow you to trigger manually too
-  only:
-    refs:
-      - master
+        - .gitlab-ci-docker-build.yml
+    - when: manual
