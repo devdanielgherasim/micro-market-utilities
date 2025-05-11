@@ -19,7 +19,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl -sL https://aka.ms/InstallAzureCLIDeb | bash && \
     rm -rf /var/lib/apt/lists/*
 
-
 FROM openjdk:21-slim
 
 ENV DEBIAN_FRONTEND=noninteractive

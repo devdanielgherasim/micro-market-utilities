@@ -9,6 +9,8 @@ variables:
 build-and-push-docker-image:
   stage: build
   image: docker:latest
+  services:
+    - docker:dind
   script:
     - >
       docker build \
