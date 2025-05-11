@@ -2,24 +2,18 @@ FROM openjdk:21-slim AS build
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get install -y --no-install-recommends \
-        apt-transport-https \
-        ca-certificates \
-        curl \
-        gnupg \
-        lsb-release \
-        software-properties-common \
-        unzip
-
-RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker.gpg && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list && \
-    apt-get update && apt-get install -y --no-install-recommends docker-ce-cli
-
-RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash
-
-RUN apt-get update && apt-get install -y --no-install-recommends maven
-
-RUN rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    apt-transport-https \
+    ca-certificates \
+    curl \
+    docker-ce-cli \
+    gnupg \
+    lsb-release \
+    maven \
+    software-properties-common \
+    unzip && \
+    curl -sL https://aka.ms/InstallAzureCLIDeb | bash && \
+    rm -rf /var/lib/apt/lists/*
 
 FROM openjdk:21-slim
 
