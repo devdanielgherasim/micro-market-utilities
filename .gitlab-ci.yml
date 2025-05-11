@@ -11,6 +11,8 @@ build-and-push-docker-image:
   image: docker:latest
   services:
     - docker:dind
+  before_script:
+    - echo "$ARM_CLIENT_SECRET" | docker login $AZURE_REGISTRY_NAME -u "$ARM_CLIENT_ID" --password-stdin
   script:
     - >
       docker build \

@@ -25,11 +25,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 COPY --from=build /usr/bin/docker /usr/bin/docker
 COPY --from=build /usr/share/keyrings/docker.gpg /usr/share/keyrings/docker.gpg
-COPY --from=build /usr/lib/maven /usr/lib/maven
 COPY --from=build /usr/bin/mvn /usr/bin/mvn
 COPY --from=build /usr/share/maven /usr/share/maven
 COPY --from=build /usr/bin/az /usr/bin/az
-COPY --from=build /opt/microsoft /opt/microsoft
 COPY --from=build /usr/lib/python* /usr/lib/
 COPY --from=build /usr/bin/python* /usr/bin/
 
