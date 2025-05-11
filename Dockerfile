@@ -1,30 +1,41 @@
-FROM ubuntu:22.04
+FROM openjdk:21-slim AS build
 
-RUN apt-get update && apt-get install -y \
-    apt-transport-https \
-    ca-certificates \
-    curl \
-    gnupg \
-    lsb-release \
-    software-properties-common \
-    unzip && \
-    rm -rf /var/lib/apt/lists/*
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get install -y --no-install-recommends \
+        apt-transport-https \
+        ca-certificates \
+        curl \
+        gnupg \
+        lsb-release \
+        software-properties-common \
+        unzip
 
 RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker.gpg && \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list && \
-    apt-get update && apt-get install -y docker-ce-cli && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get update && apt-get install -y --no-install-recommends docker-ce-cli
 
-RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash && \
-    rm -rf /var/lib/apt/lists/*
+RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash
 
-RUN apt-get update && apt-get install -y openjdk-21-jdk && \
-    rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends maven
 
-RUN apt-get update && apt-get install -y maven && \
-    rm -rf /var/lib/apt/lists/*
+RUN rm -rf /var/lib/apt/lists/*
 
-ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
-ENV PATH=$JAVA_HOME/bin:$PATH
+FROM openjdk:21-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+COPY --from=build /usr/bin/docker /usr/bin/docker
+COPY --from=build /usr/share/keyrings/docker.gpg /usr/share/keyrings/docker.gpg
+COPY --from=build /usr/lib/maven /usr/lib/maven
+COPY --from=build /usr/bin/mvn /usr/bin/mvn
+COPY --from=build /usr/share/maven /usr/share/maven
+COPY --from=build /usr/bin/az /usr/bin/az
+COPY --from=build /opt/microsoft /opt/microsoft
+COPY --from=build /usr/lib/python* /usr/lib/
+COPY --from=build /usr/bin/python* /usr/bin/
+
+ENV JAVA_HOME=/usr/local/openjdk-21
+ENV PATH=$JAVA_HOME/bin:/usr/share/maven/bin:$PATH
 
 CMD ["bash"]

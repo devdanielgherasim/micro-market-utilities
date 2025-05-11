@@ -2,36 +2,28 @@ stages:
   - build
 
 variables:
-  IMAGE_NAME: maven-docker-azure
-  IMAGE_TAG: ${CI_COMMIT_SHA}
-  DOCKER_BUILDKIT: 1
+  IMAGE_NAME: "java21-docker-azcli"
+  IMAGE_TAG: "$CI_COMMIT_SHA"
+  DOCKER_BUILDKIT: "1"
 
 build-and-push-docker-image:
   stage: build
   image: docker:latest
   services:
     - docker:dind
-  before_script:
-    - apk add --no-cache python3 py3-pip python3-dev libffi-dev openssl-dev gcc musl-dev make
-    - python3 -m venv /opt/venv
-    - source /opt/venv/bin/activate
-    - pip install azure-cli
-    - az login --service-principal --username $ARM_CLIENT_ID --password $ARM_CLIENT_SECRET --tenant $ARM_TENANT_ID
-    - az acr login --name $ACR_NAME
   script:
-    - |
+    - >
       docker build \
-        --cache-from ${AZURE_REGISTRY_NAME}/${IMAGE_NAME}:latest \
+        --cache-from "$AZURE_REGISTRY_NAME/$IMAGE_NAME:latest" \
         --build-arg BUILDKIT_INLINE_CACHE=1 \
-        -t ${AZURE_REGISTRY_NAME}/${IMAGE_NAME}:${IMAGE_TAG} \
+        -t "$AZURE_REGISTRY_NAME/$IMAGE_NAME:$IMAGE_TAG" \
         .
-    - docker push ${AZURE_REGISTRY_NAME}/${IMAGE_NAME}:${IMAGE_TAG}
-    - |
+    - docker push "$AZURE_REGISTRY_NAME/$IMAGE_NAME:$IMAGE_TAG"
+    - >
       if [ "$CI_COMMIT_BRANCH" = "main" ]; then
-        docker tag ${AZURE_REGISTRY_NAME}/${IMAGE_NAME}:${IMAGE_TAG} ${AZURE_REGISTRY_NAME}/${IMAGE_NAME}:latest
-        docker push ${AZURE_REGISTRY_NAME}/${IMAGE_NAME}:latest
+        docker tag "$AZURE_REGISTRY_NAME/$IMAGE_NAME:$IMAGE_TAG" "$AZURE_REGISTRY_NAME/$IMAGE_NAME:latest"
+        docker push "$AZURE_REGISTRY_NAME/$IMAGE_NAME:latest"
       fi
   rules:
-    - if: $CI_COMMIT_BRANCH
-      exists:
+    - exists:
         - Dockerfile
