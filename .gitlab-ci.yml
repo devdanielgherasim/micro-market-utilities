@@ -1,21 +1,41 @@
 stages:
-  - docker-build
+  - build
 
 variables:
-  DOCKER_IMAGE_VERSIONED: $CI_REGISTRY_IMAGE/maven-docker:${CI_COMMIT_SHORT_SHA}
+  DOCKER_HOST: tcp://docker:2376
+  DOCKER_TLS_CERTDIR: "/certs"
+  DOCKER_TLS_VERIFY: 1
+  DOCKER_CERT_PATH: "/certs/client"
+  QUARKUS_DOCKER_HOST: ${DOCKER_HOST}
+  MAVEN_OPTS: "-Dmaven.repo.local=.m2/repository"
+  IMAGE_NAME: maven-docker-azure
+  IMAGE_TAG: ${CI_COMMIT_SHA}
+  DOCKER_BUILDKIT: 1
 
-docker-build-maven-image:
-  stage: docker-build
+build-and-push-docker-image:
+  stage: build
   image: docker:latest
   services:
     - docker:dind
   before_script:
-    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - apk add --no-cache curl
+    - curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+    - az login --service-principal --username $ARM_CLIENT_ID --password $ARM_CLIENT_SECRET --tenant $ARM_TENANT_ID
+    - az acr login --name $ACR_NAME
   script:
-    - docker build -t "$DOCKER_IMAGE_VERSIONED" .
-    - docker push "$DOCKER_IMAGE_VERSIONED"
+    - |
+      docker build \
+        --cache-from ${AZURE_REGISTRY_NAME}/${IMAGE_NAME}:latest \
+        --build-arg BUILDKIT_INLINE_CACHE=1 \
+        -t ${AZURE_REGISTRY_NAME}/${IMAGE_NAME}:${IMAGE_TAG} \
+        .
+    - docker push ${AZURE_REGISTRY_NAME}/${IMAGE_NAME}:${IMAGE_TAG}
+    - |
+      if [ "$CI_COMMIT_BRANCH" = "main" ]; then
+        docker tag ${AZURE_REGISTRY_NAME}/${IMAGE_NAME}:${IMAGE_TAG} ${AZURE_REGISTRY_NAME}/${IMAGE_NAME}:latest
+        docker push ${AZURE_REGISTRY_NAME}/${IMAGE_NAME}:latest
+      fi
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "master"'
-      changes:
+    - if: $CI_COMMIT_BRANCH
+      exists:
         - Dockerfile
-    - when: manual
