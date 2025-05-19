@@ -27,5 +27,7 @@ build-and-push-docker-image:
         docker push "$AZURE_REGISTRY_NAME/$IMAGE_NAME:latest"
       fi
   rules:
+    - when: manual
+    - allow_failure: false
     - exists:
         - Dockerfile
