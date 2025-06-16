@@ -12,19 +12,19 @@ build-and-push-docker-image:
   services:
     - docker:dind
   before_script:
-    - echo "$ARM_CLIENT_SECRET" | docker login $AZURE_REGISTRY_NAME -u "$ARM_CLIENT_ID" --password-stdin
+    - echo "$ARM_CLIENT_SECRET" | docker login $CONTAINER_REGISTRY_NAME -u "$ARM_CLIENT_ID" --password-stdin
   script:
     - >
       docker build \
-        --cache-from "$AZURE_REGISTRY_NAME/$IMAGE_NAME:latest" \
+        --cache-from "$CONTAINER_REGISTRY_NAME/$IMAGE_NAME:latest" \
         --build-arg BUILDKIT_INLINE_CACHE=1 \
-        -t "$AZURE_REGISTRY_NAME/$IMAGE_NAME:$IMAGE_TAG" \
+        -t "$CONTAINER_REGISTRY_NAME/$IMAGE_NAME:$IMAGE_TAG" \
         .
-    - docker push "$AZURE_REGISTRY_NAME/$IMAGE_NAME:$IMAGE_TAG"
+    - docker push "$CONTAINER_REGISTRY_NAME/$IMAGE_NAME:$IMAGE_TAG"
     - >
       if [ "$CI_COMMIT_BRANCH" = "main" ]; then
-        docker tag "$AZURE_REGISTRY_NAME/$IMAGE_NAME:$IMAGE_TAG" "$AZURE_REGISTRY_NAME/$IMAGE_NAME:latest"
-        docker push "$AZURE_REGISTRY_NAME/$IMAGE_NAME:latest"
+        docker tag "$CONTAINER_REGISTRY_NAME/$IMAGE_NAME:$IMAGE_TAG" "$CONTAINER_REGISTRY_NAME/$IMAGE_NAME:latest"
+        docker push "$CONTAINER_REGISTRY_NAME/$IMAGE_NAME:latest"
       fi
   rules:
     - when: manual
