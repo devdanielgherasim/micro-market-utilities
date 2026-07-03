@@ -15,7 +15,8 @@ if [[ -z "${CONTAINER_REGISTRY_NAME:-}" ]]; then
       CONTAINER_REGISTRY_NAME="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
       ;;
     azure)
-      CONTAINER_REGISTRY_NAME="acr${PROJECT_NAMESPACE}${ENVIRONMENT}.azurecr.io"
+      AZURE_ACR_PROJECT="${PROJECT_NAMESPACE//-/}"
+      CONTAINER_REGISTRY_NAME="acr${AZURE_ACR_PROJECT}${ENVIRONMENT}.azurecr.io"
       ;;
     gcp)
       : "${GCP_PROJECT_ID:?Set GCP_PROJECT_ID or CONTAINER_REGISTRY_NAME for GCP image builds}"
@@ -33,17 +34,55 @@ echo "===== Logging in to ${CLOUD_PROVIDER} container registry: ${CONTAINER_REGI
 case "${CLOUD_PROVIDER}" in
   aws)
     AWS_REGION="${AWS_REGION:-us-east-1}"
+    if [[ -n "${AWS_ROLE_ARN:-}" && -n "${GITLAB_OIDC_TOKEN:-}" ]]; then
+      CREDS="$(aws sts assume-role-with-web-identity \
+        --role-arn "${AWS_ROLE_ARN}" \
+        --role-session-name "gitlab-${CI_PROJECT_ID:-local}-${CI_PIPELINE_ID:-local}" \
+        --web-identity-token "${GITLAB_OIDC_TOKEN}" \
+        --duration-seconds 3600)"
+      export AWS_ACCESS_KEY_ID="$(echo "${CREDS}" | jq -r '.Credentials.AccessKeyId')"
+      export AWS_SECRET_ACCESS_KEY="$(echo "${CREDS}" | jq -r '.Credentials.SecretAccessKey')"
+      export AWS_SESSION_TOKEN="$(echo "${CREDS}" | jq -r '.Credentials.SessionToken')"
+    fi
     aws ecr get-login-password --region "${AWS_REGION}" |
       docker login --username AWS --password-stdin "${CONTAINER_REGISTRY_NAME}"
     ;;
   azure)
     : "${ARM_CLIENT_ID:?Set ARM_CLIENT_ID for Azure Container Registry login}"
-    : "${ARM_CLIENT_SECRET:?Set ARM_CLIENT_SECRET for Azure Container Registry login}"
-    echo "${ARM_CLIENT_SECRET}" |
-      docker login "${CONTAINER_REGISTRY_NAME}" -u "${ARM_CLIENT_ID}" --password-stdin
+    if [[ "${ARM_USE_OIDC:-false}" == "true" ]]; then
+      : "${ARM_TENANT_ID:?Set ARM_TENANT_ID for Azure OIDC login}"
+      : "${GITLAB_OIDC_TOKEN:?Set GITLAB_OIDC_TOKEN for Azure OIDC login}"
+      az login --service-principal \
+        --username "${ARM_CLIENT_ID}" \
+        --tenant "${ARM_TENANT_ID}" \
+        --federated-token "${GITLAB_OIDC_TOKEN}" >/dev/null
+      az acr login --name "${CONTAINER_REGISTRY_NAME%%.azurecr.io}"
+    else
+      : "${ARM_CLIENT_SECRET:?Set ARM_CLIENT_SECRET for Azure Container Registry login}"
+      echo "${ARM_CLIENT_SECRET}" |
+        docker login "${CONTAINER_REGISTRY_NAME}" -u "${ARM_CLIENT_ID}" --password-stdin
+    fi
     ;;
   gcp)
     GCP_REGION="${GCP_REGION:-europe-west3}"
+    if [[ -n "${GCP_WORKLOAD_IDENTITY_PROVIDER:-}" && -n "${GCP_SERVICE_ACCOUNT_EMAIL:-}" && -n "${GITLAB_OIDC_TOKEN:-}" ]]; then
+      OIDC_TOKEN_FILE="${CI_PROJECT_DIR:-.}/gitlab-oidc-token"
+      WIF_CREDENTIALS_FILE="${CI_PROJECT_DIR:-.}/gcp-wif-credentials.json"
+      printf '%s' "${GITLAB_OIDC_TOKEN}" > "${OIDC_TOKEN_FILE}"
+      cat > "${WIF_CREDENTIALS_FILE}" <<EOF
+{
+  "type": "external_account",
+  "audience": "//iam.googleapis.com/${GCP_WORKLOAD_IDENTITY_PROVIDER}",
+  "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+  "token_url": "https://sts.googleapis.com/v1/token",
+  "credential_source": {
+    "file": "${OIDC_TOKEN_FILE}"
+  },
+  "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${GCP_SERVICE_ACCOUNT_EMAIL}:generateAccessToken"
+}
+EOF
+      gcloud auth login --cred-file="${WIF_CREDENTIALS_FILE}" --quiet
+    fi
     gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
     ;;
 esac

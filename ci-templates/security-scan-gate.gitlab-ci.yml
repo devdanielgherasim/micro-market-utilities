@@ -1,0 +1,92 @@
+# =============================================================================
+# security-scan-gate.gitlab-ci.yml
+# -----------------------------------------------------------------------------
+# Reusable GitLab CI template that centralizes application-level security
+# scanning and turns GitLab's free-tier scanners into a *pipeline gate*.
+#
+# GitLab's stock Security/* templates only populate the MR security widget --
+# on the Free tier they never fail the pipeline on their own. The `report-gate`
+# job below parses their JSON reports (gl-*-report.json) with `jq` and fails
+# the pipeline when any finding is HIGH or CRITICAL severity.
+#
+# Consumed via cross-project include, e.g. from catalog/orders/audit/frontend:
+#   include:
+#     - project: microservices1691715/utilities
+#       ref: main
+#       file: ci-templates/java-service.gitlab-ci.yml   # which includes this
+#
+# Requires the consuming pipeline to define at least the `test` and `scan`
+# stages (the java-service / frontend entrypoint templates do).
+# `report-gate` runs in `scan` and, by stage ordering, downloads the report
+# artifacts produced by the `test`-stage scanners.
+# =============================================================================
+
+include:
+  - template: Security/SAST.gitlab-ci.yml
+  - template: Security/Dependency-Scanning.gitlab-ci.yml
+  - template: Security/Secret-Detection.gitlab-ci.yml
+
+variables:
+  # Fail the gate on findings at or above this severity (space-separated list,
+  # matched case-insensitively against each report's `severity` field).
+  SECURITY_GATE_SEVERITIES: "high critical"
+
+# -----------------------------------------------------------------------------
+# report-gate: parse the scanners' JSON reports and fail on HIGH/CRITICAL.
+# Reports handled (each optional -- a scanner may legitimately produce none):
+#   * gl-sast-report.json
+#   * gl-dependency-scanning-report.json
+#   * gl-secret-detection-report.json
+# -----------------------------------------------------------------------------
+report-gate:
+  stage: scan
+  image: ${CI_TOOLS_IMAGE}
+  # No `needs:` on purpose: relying on stage ordering makes this job download
+  # artifacts from every `test`-stage job (including whichever analyzers ran)
+  # without having to hard-code analyzer job names, which vary by language.
+  variables:
+    GIT_STRATEGY: none
+  script:
+    # jq program written via a single-quoted heredoc so the shell cannot mangle
+    # its quoting. It emits one line per finding whose (lowercased) severity is
+    # present in the space-separated $wanted list.
+    - |
+      cat > /tmp/gate.jq <<'JQ'
+      .vulnerabilities[]?
+      | ((.severity // "unknown") | ascii_downcase) as $s
+      | select($wanted | split(" ") | index($s))
+      | "  - [\(.severity)] \(.name // .message // .cve // "finding") @ \(.location.file // .location.dependency.package.name // "n/a")"
+      JQ
+    - |
+      set -eu
+      GATE_FAILED=0
+      for report in gl-sast-report.json gl-dependency-scanning-report.json gl-secret-detection-report.json; do
+        if [ ! -f "${report}" ]; then
+          echo "[skip]  ${report} not present (scanner produced no report)."
+          continue
+        fi
+        if ! jq -e . "${report}" >/dev/null 2>&1; then
+          echo "[warn]  ${report} exists but is not valid JSON -- skipping."
+          continue
+        fi
+        findings="$(jq -r --arg wanted "${SECURITY_GATE_SEVERITIES}" -f /tmp/gate.jq "${report}")"
+        if [ -n "${findings}" ]; then
+          count="$(printf '%s\n' "${findings}" | grep -c '^')"
+          echo "[FAIL]  ${report}: ${count} finding(s) at [${SECURITY_GATE_SEVERITIES}]:"
+          printf '%s\n' "${findings}"
+          GATE_FAILED=1
+        else
+          echo "[ok]    ${report}: no findings at [${SECURITY_GATE_SEVERITIES}]."
+        fi
+      done
+      if [ "${GATE_FAILED}" -ne 0 ]; then
+        echo ""
+        echo "Security gate FAILED: HIGH/CRITICAL findings present in one or more reports."
+        exit 1
+      fi
+      echo ""
+      echo "Security gate PASSED: no HIGH/CRITICAL findings."
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+  interruptible: true
