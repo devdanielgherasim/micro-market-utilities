@@ -1,3 +1,9 @@
+include:
+  - template: Security/Secret-Detection.gitlab-ci.yml
+
+secret_detection:
+  stage: build
+
 stages:
   - build
 

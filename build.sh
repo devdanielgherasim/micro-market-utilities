@@ -1,54 +1,61 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-CONTAINER_REGISTRY_NAME=""
-ARM_CLIENT_ID=""
-ARM_CLIENT_SECRET=""
+ENVIRONMENT="${ENVIRONMENT:-prod}"
+PROJECT_NAMESPACE="${PROJECT_NAMESPACE:-danielgherasim-microservices}"
+CLOUD_PROVIDER="${CLOUD_PROVIDER:-aws}"
+CI_COMMIT_SHA="${CI_COMMIT_SHA:-$(git rev-parse --short HEAD 2>/dev/null || echo local)}"
+SERVICES_RAW="${SERVICES:-audit catalog orders micro-market-frontend}"
 
-CI_COMMIT_SHA="1.0.0"
-PROJECT_NAMESPACE="microservices1691711"
+if [[ -z "${CONTAINER_REGISTRY_NAME:-}" ]]; then
+  case "${CLOUD_PROVIDER}" in
+    aws)
+      : "${AWS_ACCOUNT_ID:?Set AWS_ACCOUNT_ID or CONTAINER_REGISTRY_NAME for AWS image builds}"
+      AWS_REGION="${AWS_REGION:-us-east-1}"
+      CONTAINER_REGISTRY_NAME="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+      ;;
+    azure)
+      CONTAINER_REGISTRY_NAME="acr${PROJECT_NAMESPACE}${ENVIRONMENT}.azurecr.io"
+      ;;
+    *)
+      echo "Unsupported CLOUD_PROVIDER '${CLOUD_PROVIDER}'. Set CONTAINER_REGISTRY_NAME explicitly." >&2
+      exit 1
+      ;;
+  esac
+fi
 
-#SERVICES=("audit" "catalog" "orders" "micro-market-frontend")
-SERVICES=("audit" "catalog" "orders" "micro-market-frontend")
+echo "===== Logging in to ${CLOUD_PROVIDER} container registry: ${CONTAINER_REGISTRY_NAME} ====="
+case "${CLOUD_PROVIDER}" in
+  aws)
+    AWS_REGION="${AWS_REGION:-us-east-1}"
+    aws ecr get-login-password --region "${AWS_REGION}" |
+      docker login --username AWS --password-stdin "${CONTAINER_REGISTRY_NAME}"
+    ;;
+  azure)
+    : "${ARM_CLIENT_ID:?Set ARM_CLIENT_ID for Azure Container Registry login}"
+    : "${ARM_CLIENT_SECRET:?Set ARM_CLIENT_SECRET for Azure Container Registry login}"
+    echo "${ARM_CLIENT_SECRET}" |
+      docker login "${CONTAINER_REGISTRY_NAME}" -u "${ARM_CLIENT_ID}" --password-stdin
+    ;;
+esac
 
 export CONTAINER_REGISTRY_NAME
-export ARM_CLIENT_ID
-export ARM_CLIENT_SECRET
 export CI_COMMIT_SHA
 export PROJECT_NAMESPACE
-
-if [ -z "$CONTAINER_REGISTRY_NAME" ]; then
-  echo "Error: CONTAINER_REGISTRY_NAME environment variable is not set"
-  exit 1
-fi
-
-if [ ! -z "$ARM_CLIENT_ID" ] && [ ! -z "$ARM_CLIENT_SECRET" ]; then
-  echo "===== Logging in to Container Registry ====="
-  echo "$ARM_CLIENT_SECRET" | docker login $CONTAINER_REGISTRY_NAME -u "$ARM_CLIENT_ID" --password-stdin
-  if [ $? -ne 0 ]; then
-    echo "Error: Failed to log in to Container Registry"
-    exit 1
-  fi
-else
-  echo "Warning: ARM_CLIENT_ID or ARM_CLIENT_SECRET not set. You may need to log in to ACR manually."
-fi
+export CLOUD_PROVIDER
 
 cd ..
 
-for SERVICE in "${SERVICES[@]}"; do
-  echo "===== Building $SERVICE service ====="
-  
-  export CI_PROJECT_NAME="$SERVICE"
-  
-  if [ -d "./$SERVICE" ]; then
-    (cd ./$SERVICE && ./build.sh)
-    
-    if [ $? -ne 0 ]; then
-      echo "Error: Failed to build $SERVICE service"
-      exit 1
-    fi
-  else
-    echo "Warning: Directory for $SERVICE not found"
+for SERVICE in ${SERVICES_RAW}; do
+  echo "===== Building ${SERVICE} service ====="
+  export CI_PROJECT_NAME="${SERVICE}"
+
+  if [[ ! -d "./${SERVICE}" ]]; then
+    echo "Service directory not found: ${SERVICE}" >&2
+    exit 1
   fi
+
+  (cd "./${SERVICE}" && ./build.sh)
 done
 
 echo "===== All builds completed successfully ====="
