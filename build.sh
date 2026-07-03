@@ -17,6 +17,11 @@ if [[ -z "${CONTAINER_REGISTRY_NAME:-}" ]]; then
     azure)
       CONTAINER_REGISTRY_NAME="acr${PROJECT_NAMESPACE}${ENVIRONMENT}.azurecr.io"
       ;;
+    gcp)
+      : "${GCP_PROJECT_ID:?Set GCP_PROJECT_ID or CONTAINER_REGISTRY_NAME for GCP image builds}"
+      GCP_REGION="${GCP_REGION:-europe-west3}"
+      CONTAINER_REGISTRY_NAME="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}"
+      ;;
     *)
       echo "Unsupported CLOUD_PROVIDER '${CLOUD_PROVIDER}'. Set CONTAINER_REGISTRY_NAME explicitly." >&2
       exit 1
@@ -37,12 +42,18 @@ case "${CLOUD_PROVIDER}" in
     echo "${ARM_CLIENT_SECRET}" |
       docker login "${CONTAINER_REGISTRY_NAME}" -u "${ARM_CLIENT_ID}" --password-stdin
     ;;
+  gcp)
+    GCP_REGION="${GCP_REGION:-europe-west3}"
+    gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+    ;;
 esac
 
 export CONTAINER_REGISTRY_NAME
 export CI_COMMIT_SHA
 export PROJECT_NAMESPACE
 export CLOUD_PROVIDER
+export ENVIRONMENT
+export MAIN_SCRIPT_LOGIN=1
 
 cd ..
 
