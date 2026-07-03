@@ -240,3 +240,62 @@ cosign-verify:
         --certificate-identity "${COSIGN_CERT_IDENTITY}" \
         "${IMAGE_TARGET}" > /dev/null
       echo "cosign verify gate PASSED."
+
+# -----------------------------------------------------------------------------
+# trigger-deployment-promotion: hands the just-verified image's tag to the
+# `deployment` repo's `promote-dev` job (Phase 10 Task 29), which is the only
+# thing that actually knows how to write it into
+# environments/dev/<app>-values.yaml for ArgoCD to pick up.
+#
+# Why this exists: `deployment`'s own $CI_COMMIT_SHA is a `deployment`-repo
+# commit hash, unrelated to the SHA this service's build.sh tagged the image
+# with (two different repos' commit histories). The image tag that matters is
+# THIS pipeline's $CI_COMMIT_SHA (matching every build.sh's tag scheme,
+# confirmed in Task 29). A GitLab multi-project pipeline trigger is the
+# standard way to carry that value across the repo boundary as a downstream
+# pipeline variable.
+#
+# CI_PROJECT_NAME here is exactly "catalog"/"orders"/"audit"/
+# "micro-market-frontend" -- matches deployment's chart directory names
+# 1:1, no translation needed.
+#
+# Requires a `deployment`-scoped, write-capable trigger credential distinct
+# from cosign's Sigstore token: GitLab's `trigger: project:` uses the
+# pipeline-triggering user/token's own permissions on the target project, not
+# CI_JOB_TOKEN by default across projects unless the target project has opted
+# in via Settings > CI/CD > Token Access > "allowed to push". Simplest,
+# explicit alternative used here: a masked+protected CI/CD variable
+# `DEPLOYMENT_TRIGGER_TOKEN` (a GitLab Pipeline Trigger Token created on the
+# `deployment` project, Settings > CI/CD > Pipeline triggers) fed to the
+# `trigger:` keyword's `token:` is NOT supported by the declarative `trigger:`
+# syntax (that only works with the `CI_JOB_TOKEN`/cross-project-push-access
+# path) -- so this job calls the GitLab Pipeline Trigger API directly with
+# curl instead of the `trigger:` keyword, which does support an explicit
+# trigger token. Human action required (cannot be done from this
+# environment, no live GitLab access): create a Pipeline Trigger on the
+# `deployment` project and store its token as a masked+protected CI/CD
+# variable `DEPLOYMENT_TRIGGER_TOKEN` on this project (and its siblings
+# catalog/orders/audit/micro-market-frontend).
+# -----------------------------------------------------------------------------
+trigger-deployment-promotion:
+  stage: promote
+  image: ${CI_TOOLS_IMAGE}
+  needs:
+    - job: cosign-verify
+  variables:
+    GIT_STRATEGY: none
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  interruptible: true
+  script:
+    - |
+      set -eu
+      : "${DEPLOYMENT_TRIGGER_TOKEN:?DEPLOYMENT_TRIGGER_TOKEN CI/CD variable is not set. A human must create a Pipeline Trigger on the deployment project (Settings > CI/CD > Pipeline triggers) and store its token as a masked+protected variable of this name -- see utilities/ci-templates/image-supply-chain.gitlab-ci.yml and deployment/.gitlab-ci.yml's promote-dev job.}"
+      echo "Triggering deployment promotion: app=${CI_PROJECT_NAME} tag=${CI_COMMIT_SHA}"
+      curl --fail-with-body -sS -X POST \
+        --form token="${DEPLOYMENT_TRIGGER_TOKEN}" \
+        --form ref=main \
+        --form "variables[PROMOTED_APP]=${CI_PROJECT_NAME}" \
+        --form "variables[PROMOTED_IMAGE_TAG]=${CI_COMMIT_SHA}" \
+        "${CI_SERVER_URL}/api/v4/projects/microservices1691715%2Fdeployment/trigger/pipeline"
+      echo "Triggered."
