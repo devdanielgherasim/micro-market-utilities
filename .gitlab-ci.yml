@@ -8,14 +8,18 @@ stages:
   - build
 
 variables:
-  IMAGE_NAME: "java21-docker-azcli"
-  IMAGE_TAG: "$CI_COMMIT_SHA"
   DOCKER_BUILDKIT: "1"
   CLOUD_PROVIDER: "aws"
   ENVIRONMENT: "dev"
   PROJECT_NAMESPACE: "danielgherasim-microservices"
 
-build-and-push-docker-image:
+# Builds all three cloud-specific CI toolchain images from the multi-stage
+# Dockerfile and pushes them to the active cloud's registry.
+# Run once per cloud by overriding CLOUD_PROVIDER at the pipeline level:
+#   CLOUD_PROVIDER=aws   → pushes to ECR
+#   CLOUD_PROVIDER=azure → pushes to ACR
+#   CLOUD_PROVIDER=gcp   → pushes to Artifact Registry
+build-ci-images:
   stage: build
   image: docker:latest
   id_tokens:
@@ -30,7 +34,7 @@ build-and-push-docker-image:
         case "${CLOUD_PROVIDER}" in
           aws)
             : "${AWS_ACCOUNT_ID:?Set AWS_ACCOUNT_ID or CONTAINER_REGISTRY_NAME for AWS image builds}"
-            AWS_REGION="${AWS_REGION:-us-east-1}"
+            AWS_REGION="${AWS_REGION:-eu-central-1}"
             CONTAINER_REGISTRY_NAME="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
             ;;
           azure)
@@ -44,32 +48,36 @@ build-and-push-docker-image:
             ;;
         esac
       fi
-      case "${CLOUD_PROVIDER}" in
-        aws) IMAGE_REF="${CONTAINER_REGISTRY_NAME}/${PROJECT_NAMESPACE}/${ENVIRONMENT}/${IMAGE_NAME}" ;;
-        gcp) IMAGE_REF="${CONTAINER_REGISTRY_NAME}/${PROJECT_NAMESPACE}-${ENVIRONMENT}/${IMAGE_NAME}" ;;
-        *) IMAGE_REF="${CONTAINER_REGISTRY_NAME}/${IMAGE_NAME}" ;;
-      esac
     - |
       case "${CLOUD_PROVIDER}" in
         aws)
           if [ -n "${AWS_ROLE_ARN:-}" ]; then
-            CREDS="$(aws sts assume-role-with-web-identity --role-arn "${AWS_ROLE_ARN}" --role-session-name "gitlab-${CI_PROJECT_ID}-${CI_PIPELINE_ID}" --web-identity-token "${GITLAB_OIDC_TOKEN}" --duration-seconds 3600)"
+            CREDS="$(aws sts assume-role-with-web-identity \
+              --role-arn "${AWS_ROLE_ARN}" \
+              --role-session-name "gitlab-${CI_PROJECT_ID}-${CI_PIPELINE_ID}" \
+              --web-identity-token "${GITLAB_OIDC_TOKEN}" \
+              --duration-seconds 3600)"
             export AWS_ACCESS_KEY_ID="$(echo "${CREDS}" | jq -r '.Credentials.AccessKeyId')"
             export AWS_SECRET_ACCESS_KEY="$(echo "${CREDS}" | jq -r '.Credentials.SecretAccessKey')"
             export AWS_SESSION_TOKEN="$(echo "${CREDS}" | jq -r '.Credentials.SessionToken')"
           fi
-          aws ecr get-login-password --region "${AWS_REGION:-us-east-1}" | docker login --username AWS --password-stdin "${CONTAINER_REGISTRY_NAME}"
+          aws ecr get-login-password --region "${AWS_REGION:-eu-central-1}" \
+            | docker login --username AWS --password-stdin "${CONTAINER_REGISTRY_NAME}"
           ;;
         azure)
           : "${ARM_CLIENT_ID:?Set ARM_CLIENT_ID for Azure registry login}"
           if [ "${ARM_USE_OIDC:-false}" = "true" ]; then
             : "${ARM_TENANT_ID:?Set ARM_TENANT_ID for Azure OIDC login}"
             python3 -m pip install --break-system-packages --no-cache-dir azure-cli
-            az login --service-principal --username "${ARM_CLIENT_ID}" --tenant "${ARM_TENANT_ID}" --federated-token "${GITLAB_OIDC_TOKEN}" >/dev/null
+            az login --service-principal \
+              --username "${ARM_CLIENT_ID}" \
+              --tenant "${ARM_TENANT_ID}" \
+              --federated-token "${GITLAB_OIDC_TOKEN}" >/dev/null
             az acr login --name "${CONTAINER_REGISTRY_NAME%%.azurecr.io}"
           else
-            : "${ARM_CLIENT_SECRET:?Set ARM_CLIENT_SECRET or use ARM_USE_OIDC=true for Azure registry login}"
-            echo "${ARM_CLIENT_SECRET}" | docker login "${CONTAINER_REGISTRY_NAME}" -u "${ARM_CLIENT_ID}" --password-stdin
+            : "${ARM_CLIENT_SECRET:?Set ARM_CLIENT_SECRET or use ARM_USE_OIDC=true}"
+            echo "${ARM_CLIENT_SECRET}" \
+              | docker login "${CONTAINER_REGISTRY_NAME}" -u "${ARM_CLIENT_ID}" --password-stdin
           fi
           ;;
         gcp)
@@ -93,26 +101,33 @@ EOF
             gcloud auth login --cred-file="${CI_PROJECT_DIR}/gcp-wif-credentials.json" --quiet
             gcloud auth configure-docker "${GCP_REGION:-europe-west3}-docker.pkg.dev" --quiet
           else
-            echo "Set GCP_WORKLOAD_IDENTITY_PROVIDER and GCP_SERVICE_ACCOUNT_EMAIL for GCP registry login." >&2
+            echo "Set GCP_WORKLOAD_IDENTITY_PROVIDER and GCP_SERVICE_ACCOUNT_EMAIL." >&2
             exit 1
           fi
           ;;
       esac
     - export CONTAINER_REGISTRY_NAME
-    - export IMAGE_REF
   script:
-    - >
-      docker build \
-        --cache-from "$IMAGE_REF:latest" \
-        --build-arg BUILDKIT_INLINE_CACHE=1 \
-        -t "$IMAGE_REF:$IMAGE_TAG" \
-        .
-    - docker push "$IMAGE_REF:$IMAGE_TAG"
-    - >
-      if [ "$CI_COMMIT_BRANCH" = "main" ]; then
-        docker tag "$IMAGE_REF:$IMAGE_TAG" "$IMAGE_REF:latest"
-        docker push "$IMAGE_REF:latest"
-      fi
+    - |
+      for TARGET in aws azure gcp; do
+        case "${CLOUD_PROVIDER}" in
+          aws) IMAGE_REF="${CONTAINER_REGISTRY_NAME}/${PROJECT_NAMESPACE}/${ENVIRONMENT}/ci-base-${TARGET}" ;;
+          gcp) IMAGE_REF="${CONTAINER_REGISTRY_NAME}/${PROJECT_NAMESPACE}-${ENVIRONMENT}/ci-base-${TARGET}" ;;
+          *)   IMAGE_REF="${CONTAINER_REGISTRY_NAME}/ci-base-${TARGET}" ;;
+        esac
+        echo "==> Building ci-base-${TARGET} → ${IMAGE_REF}"
+        docker build \
+          --target "${TARGET}" \
+          --cache-from "${IMAGE_REF}:latest" \
+          --build-arg BUILDKIT_INLINE_CACHE=1 \
+          -t "${IMAGE_REF}:${CI_COMMIT_SHA}" \
+          .
+        docker push "${IMAGE_REF}:${CI_COMMIT_SHA}"
+        if [ "${CI_COMMIT_BRANCH}" = "main" ]; then
+          docker tag "${IMAGE_REF}:${CI_COMMIT_SHA}" "${IMAGE_REF}:latest"
+          docker push "${IMAGE_REF}:latest"
+        fi
+      done
   rules:
     - when: manual
     - allow_failure: false

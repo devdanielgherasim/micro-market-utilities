@@ -1,6 +1,19 @@
-FROM openjdk:21-slim
+# =============================================================================
+# Multi-stage CI toolchain image.
+#
+# Build targets (select with --target):
+#   aws    JDK 21 + Maven + Docker CLI + security tools + AWS CLI v2
+#   azure  JDK 21 + Maven + Docker CLI + security tools + Azure CLI
+#   gcp    JDK 21 + Maven + Docker CLI + security tools + gcloud SDK
+#
+# BuildKit builds the base stage once; all three cloud targets reuse it.
+# =============================================================================
+
+# ── base: JDK 21 + Maven + Docker CLI + supply-chain toolchain ───────────────
+FROM eclipse-temurin:21-jdk-jammy AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-transport-https \
@@ -10,29 +23,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     lsb-release \
     maven \
-    python3 \
-    python3-pip \
     software-properties-common \
     unzip && \
-    curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker.gpg && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" \
-    > /etc/apt/sources.list.d/docker.list && \
-    curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
-    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
-    > /etc/apt/sources.list.d/google-cloud-sdk.list && \
-    apt-get update && apt-get install -y --no-install-recommends \
-    awscli \
-    docker-ce-cli \
-    google-cloud-cli && \
-    curl -sL https://aka.ms/InstallAzureCLIDeb | bash && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+      | gpg --dearmor -o /usr/share/keyrings/docker.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker.gpg] \
+      https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
+      > /etc/apt/sources.list.d/docker.list && \
+    apt-get update && apt-get install -y --no-install-recommends docker-ce-cli && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
 # Supply-chain security toolchain (pinned + SHA256-verified).
 # Versions and checksums verified 2026-07-03 against each project's upstream
-# release tag and published checksums.txt. Do NOT float to `latest` — this is
-# the CI security toolchain and reproducibility/integrity matters.
+# release tag and published checksums.txt. Do NOT float to `latest`.
 #   Trivy  0.72.0  (aquasecurity/trivy)  — container/fs vulnerability scanner
 #   Syft   1.46.0  (anchore/syft)        — SBOM generator (CycloneDX)
 #   Cosign 3.1.1   (sigstore/cosign)     — keyless signing (Fulcio/Rekor)
@@ -63,29 +67,60 @@ RUN set -eux; \
       *) echo "Unsupported architecture: ${arch}" >&2; exit 1 ;; \
     esac; \
     tmp="$(mktemp -d)"; cd "${tmp}"; \
-    # Trivy
     curl -fsSL -o "${TRIVY_ASSET}" \
       "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${TRIVY_ASSET}"; \
     echo "${TRIVY_SHA}  ${TRIVY_ASSET}" | sha256sum -c -; \
-    tar -xzf "${TRIVY_ASSET}" trivy; \
-    install -m 0755 trivy /usr/local/bin/trivy; \
-    # Syft
+    tar -xzf "${TRIVY_ASSET}" trivy; install -m 0755 trivy /usr/local/bin/trivy; \
     curl -fsSL -o "${SYFT_ASSET}" \
       "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/${SYFT_ASSET}"; \
     echo "${SYFT_SHA}  ${SYFT_ASSET}" | sha256sum -c -; \
-    tar -xzf "${SYFT_ASSET}" syft; \
-    install -m 0755 syft /usr/local/bin/syft; \
-    # Cosign (raw binary)
+    tar -xzf "${SYFT_ASSET}" syft; install -m 0755 syft /usr/local/bin/syft; \
     curl -fsSL -o cosign \
       "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/${COSIGN_ASSET}"; \
     echo "${COSIGN_SHA}  cosign" | sha256sum -c -; \
     install -m 0755 cosign /usr/local/bin/cosign; \
     cd /; rm -rf "${tmp}"; \
-    trivy --version; \
-    syft version; \
-    cosign version
+    trivy --version; syft version; cosign version
 
-ENV JAVA_HOME=/usr/local/openjdk-21
-ENV PATH=$JAVA_HOME/bin:/usr/share/maven/bin:$PATH
+CMD ["bash"]
+
+# ── aws: base + AWS CLI v2 ────────────────────────────────────────────────────
+FROM base AS aws
+
+ENV AWSCLI_VERSION=2.22.0
+RUN set -eux; \
+    case "$(uname -m)" in \
+      x86_64)  arch="x86_64" ;; \
+      aarch64) arch="aarch64" ;; \
+      *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${arch}-${AWSCLI_VERSION}.zip" \
+      -o awscliv2.zip; \
+    unzip -q awscliv2.zip; \
+    ./aws/install; \
+    rm -rf aws awscliv2.zip; \
+    aws --version
+
+CMD ["bash"]
+
+# ── azure: base + Azure CLI ───────────────────────────────────────────────────
+FROM base AS azure
+
+RUN apt-get update && \
+    curl -fsSL https://aka.ms/InstallAzureCLIDeb | bash && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+CMD ["bash"]
+
+# ── gcp: base + gcloud SDK ────────────────────────────────────────────────────
+FROM base AS gcp
+
+RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+      | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] \
+      https://packages.cloud.google.com/apt cloud-sdk main" \
+      > /etc/apt/sources.list.d/google-cloud-sdk.list && \
+    apt-get update && apt-get install -y --no-install-recommends google-cloud-cli && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 CMD ["bash"]

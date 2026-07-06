@@ -41,7 +41,7 @@
       if [ -z "${CONTAINER_REGISTRY_NAME:-}" ]; then
         case "${CLOUD_PROVIDER}" in
           aws)
-            : "${AWS_ACCOUNT_ID:?}"; AWS_REGION="${AWS_REGION:-us-east-1}"
+            : "${AWS_ACCOUNT_ID:?}"; AWS_REGION="${AWS_REGION:-eu-central-1}"
             CONTAINER_REGISTRY_NAME="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com" ;;
           azure)
             AZURE_ACR_PROJECT="$(printf '%s' "${PROJECT_NAMESPACE}" | tr -d '-')"
@@ -86,7 +86,7 @@
       : "${CLOUD_PROVIDER:?}" "${CONTAINER_REGISTRY_NAME:?CONTAINER_REGISTRY_NAME not set (build.env dotenv missing)}"
       case "${CLOUD_PROVIDER}" in
         aws)
-          AWS_REGION="${AWS_REGION:-us-east-1}"
+          AWS_REGION="${AWS_REGION:-eu-central-1}"
           if [ -n "${AWS_ROLE_ARN:-}" ] && [ -n "${GITLAB_OIDC_TOKEN:-}" ]; then
             CREDS="$(aws sts assume-role-with-web-identity \
               --role-arn "${AWS_ROLE_ARN}" \

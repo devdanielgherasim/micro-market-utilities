@@ -1,24 +1,29 @@
 # utilities
 
-Builds the shared `java21-docker-azcli` CI tools image that every other
-repo's pipeline runs its jobs in (`${CI_TOOLS_IMAGE}`), plus the reusable
-GitLab CI templates (`ci-templates/`) that give catalog, orders, audit and
+Builds the three cloud-specific CI tools images that every other repo's
+pipeline runs its jobs in (`${CI_TOOLS_IMAGE}`), plus the reusable GitLab CI
+templates (`ci-templates/`) that give catalog, orders, audit and
 micro-market-frontend a common test -> scan -> build -> sign -> promote
 pipeline shape.
 
-## The CI tools image
+## The CI tools images
 
-`Dockerfile` builds `java21-docker-azcli` from `openjdk:21-slim`:
+`Dockerfile` is a multi-stage file that produces three production images from a
+shared `base` stage. Build with `--target <cloud>` to get the right variant:
 
-- **Java 21 + Maven** — for the three Quarkus services' `./mvnw` jobs.
+| Image | Target | Cloud CLI added |
+|---|---|---|
+| `ci-base-aws` | `aws` | AWS CLI v2 (pinned) |
+| `ci-base-azure` | `azure` | Azure CLI |
+| `ci-base-gcp` | `gcp` | gcloud SDK |
+
+All three inherit the same `base` stage (built once by BuildKit):
+
+- **Java 21 + Maven** (`eclipse-temurin:21-jdk-jammy`) — for the three Quarkus services' `./mvnw` jobs.
 - **Docker CLI** (`docker-ce-cli`, from Docker's own apt repo) — the image
   itself doesn't run a daemon; jobs use it against `docker:dind` or the
   runner's Docker socket.
-- **AWS CLI, Azure CLI, Google Cloud CLI** — one image usable across all
-  three clouds' OIDC/workload-identity login flows (see `build.sh` below and
-  each service's own `build.sh`).
-- **`jq`, Python 3** — used by the cloud-login scripts (parsing STS/WIF
-  responses) and by `ci-templates`' `report-gate` job.
+- **`jq`** — used by the cloud-login scripts and by `ci-templates`' `report-gate` job.
 
 Frontend jobs that don't need this image (plain `npm`/`node` steps) run
 directly on `node:20-alpine` instead — `${CI_TOOLS_IMAGE}` is only used for
@@ -103,10 +108,11 @@ across all four app repos rather than building one image:
   micro-market-frontend` (overridable via `$SERVICES`).
 
 This repo's own `.gitlab-ci.yml` (separate from `ci-templates/`) builds and
-pushes the `java21-docker-azcli` image itself: a single `build` stage,
-GitLab Secret-Detection included, cloud-aware login logic inlined (same
-aws/azure/gcp branches as above), tagged `$CI_COMMIT_SHA` and — on `main`
-only — also `latest`. The job is `rules: when: manual`.
+pushes all three cloud images (`ci-base-aws`, `ci-base-azure`, `ci-base-gcp`)
+in a single `build-ci-images` job: GitLab Secret-Detection included,
+cloud-aware login logic inlined (same aws/azure/gcp branches as above), each
+target tagged `$CI_COMMIT_SHA` and — on `main` only — also `latest`. The job
+is `rules: when: manual`. Run once per cloud by setting `CLOUD_PROVIDER`.
 
 ## Known inconsistencies
 

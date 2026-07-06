@@ -11,7 +11,7 @@ if [[ -z "${CONTAINER_REGISTRY_NAME:-}" ]]; then
   case "${CLOUD_PROVIDER}" in
     aws)
       : "${AWS_ACCOUNT_ID:?Set AWS_ACCOUNT_ID or CONTAINER_REGISTRY_NAME for AWS image builds}"
-      AWS_REGION="${AWS_REGION:-us-east-1}"
+      AWS_REGION="${AWS_REGION:-eu-central-1}"
       CONTAINER_REGISTRY_NAME="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
       ;;
     azure)
@@ -33,7 +33,7 @@ fi
 echo "===== Logging in to ${CLOUD_PROVIDER} container registry: ${CONTAINER_REGISTRY_NAME} ====="
 case "${CLOUD_PROVIDER}" in
   aws)
-    AWS_REGION="${AWS_REGION:-us-east-1}"
+    AWS_REGION="${AWS_REGION:-eu-central-1}"
     if [[ -n "${AWS_ROLE_ARN:-}" && -n "${GITLAB_OIDC_TOKEN:-}" ]]; then
       CREDS="$(aws sts assume-role-with-web-identity \
         --role-arn "${AWS_ROLE_ARN}" \
