@@ -109,7 +109,7 @@ build-ci-images:
     - export CONTAINER_REGISTRY_NAME
   script:
     - |
-      for TARGET in aws azure gcp; do
+      for TARGET in "${CLOUD_PROVIDER}"; do
         case "${CLOUD_PROVIDER}" in
           aws) IMAGE_REF="${CONTAINER_REGISTRY_NAME}/${PROJECT_NAMESPACE}/${ENVIRONMENT}/ci-base-${TARGET}" ;;
           gcp) IMAGE_REF="${CONTAINER_REGISTRY_NAME}/${PROJECT_NAMESPACE}-${ENVIRONMENT}/ci-base-${TARGET}" ;;
