@@ -6,6 +6,7 @@
 # reference exported by the build job as a `dotenv` report (build.env):
 #
 #   CONTAINER_REGISTRY_NAME  registry host (for login), e.g. <acct>.dkr.ecr...
+#   IMAGE_REPOSITORY         <registry>/<group>/<name>                  (repo ref)
 #   IMAGE_REF                <registry>/<group>/<name>:<CI_COMMIT_SHA>  (tag ref)
 #   IMAGE_DIGEST             <registry>/<group>/<name>@sha256:<...>     (canonical)
 #
@@ -58,7 +59,8 @@
         azure) IMAGE_GROUP="${PROJECT_NAMESPACE}" ;;
         gcp)   IMAGE_GROUP="${PROJECT_NAMESPACE}-${ENVIRONMENT}" ;;
       esac
-      IMAGE_REF="${CONTAINER_REGISTRY_NAME}/${IMAGE_GROUP}/${CI_PROJECT_NAME}:${CI_COMMIT_SHA}"
+      IMAGE_REPOSITORY="${CONTAINER_REGISTRY_NAME}/${IMAGE_GROUP}/${CI_PROJECT_NAME}"
+      IMAGE_REF="${IMAGE_REPOSITORY}:${CI_COMMIT_SHA}"
       # Resolve the immutable digest from the daemon that just pushed the image.
       IMAGE_DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE_REF}" 2>/dev/null || true)"
       if [ -z "${IMAGE_DIGEST}" ]; then
@@ -67,6 +69,7 @@
       fi
       {
         echo "CONTAINER_REGISTRY_NAME=${CONTAINER_REGISTRY_NAME}"
+        echo "IMAGE_REPOSITORY=${IMAGE_REPOSITORY}"
         echo "IMAGE_REF=${IMAGE_REF}"
         echo "IMAGE_DIGEST=${IMAGE_DIGEST}"
       } > build.env
@@ -157,9 +160,61 @@
     GIT_STRATEGY: none
     COSIGN_YES: "true"
   before_script:
-    - !reference [.registry-login, script]
+    - |
+      set -eu
+      : "${CLOUD_PROVIDER:?}" "${CONTAINER_REGISTRY_NAME:?CONTAINER_REGISTRY_NAME not set (build.env dotenv missing)}"
+      case "${CLOUD_PROVIDER}" in
+        aws)
+          AWS_REGION="${AWS_REGION:-eu-central-1}"
+          if [ -n "${AWS_ROLE_ARN:-}" ] && [ -n "${GITLAB_OIDC_TOKEN:-}" ]; then
+            CREDS="$(aws sts assume-role-with-web-identity \
+              --role-arn "${AWS_ROLE_ARN}" \
+              --role-session-name "gitlab-${CI_PROJECT_ID:-local}-${CI_PIPELINE_ID:-local}" \
+              --web-identity-token "${GITLAB_OIDC_TOKEN}" \
+              --duration-seconds 3600)"
+            AWS_ACCESS_KEY_ID="$(echo "${CREDS}" | jq -r '.Credentials.AccessKeyId')"; export AWS_ACCESS_KEY_ID
+            AWS_SECRET_ACCESS_KEY="$(echo "${CREDS}" | jq -r '.Credentials.SecretAccessKey')"; export AWS_SECRET_ACCESS_KEY
+            AWS_SESSION_TOKEN="$(echo "${CREDS}" | jq -r '.Credentials.SessionToken')"; export AWS_SESSION_TOKEN
+          fi
+          aws ecr get-login-password --region "${AWS_REGION}" \
+            | docker login --username AWS --password-stdin "${CONTAINER_REGISTRY_NAME}"
+          ;;
+        azure)
+          : "${ARM_CLIENT_ID:?Set ARM_CLIENT_ID for Azure Container Registry login}"
+          if [ "${ARM_USE_OIDC:-false}" = "true" ]; then
+            : "${ARM_TENANT_ID:?}" "${GITLAB_OIDC_TOKEN:?}"
+            az login --service-principal --username "${ARM_CLIENT_ID}" \
+              --tenant "${ARM_TENANT_ID}" --federated-token "${GITLAB_OIDC_TOKEN}" >/dev/null
+            az acr login --name "${CONTAINER_REGISTRY_NAME%%.azurecr.io}"
+          else
+            : "${ARM_CLIENT_SECRET:?Set ARM_CLIENT_SECRET or ARM_USE_OIDC=true}"
+            echo "${ARM_CLIENT_SECRET}" | docker login "${CONTAINER_REGISTRY_NAME}" -u "${ARM_CLIENT_ID}" --password-stdin
+          fi
+          ;;
+        gcp)
+          GCP_REGION="${GCP_REGION:-europe-west3}"
+          if [ -n "${GCP_WORKLOAD_IDENTITY_PROVIDER:-}" ] && [ -n "${GCP_SERVICE_ACCOUNT_EMAIL:-}" ] && [ -n "${GITLAB_OIDC_TOKEN:-}" ]; then
+            OIDC_TOKEN_FILE="${CI_PROJECT_DIR:-.}/gitlab-oidc-token"
+            WIF_CREDENTIALS_FILE="${CI_PROJECT_DIR:-.}/gcp-wif-credentials.json"
+            printf '%s' "${GITLAB_OIDC_TOKEN}" > "${OIDC_TOKEN_FILE}"
+            cat > "${WIF_CREDENTIALS_FILE}" <<EOF
+      {
+        "type": "external_account",
+        "audience": "//iam.googleapis.com/${GCP_WORKLOAD_IDENTITY_PROVIDER}",
+        "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+        "token_url": "https://sts.googleapis.com/v1/token",
+        "credential_source": { "file": "${OIDC_TOKEN_FILE}" },
+        "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${GCP_SERVICE_ACCOUNT_EMAIL}:generateAccessToken"
+      }
+      EOF
+            gcloud auth login --cred-file="${WIF_CREDENTIALS_FILE}" --quiet
+          fi
+          gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+          ;;
+        *) echo "Unsupported CLOUD_PROVIDER '${CLOUD_PROVIDER}'" >&2; exit 1 ;;
+      esac
     - export IMAGE_TARGET="${IMAGE_DIGEST:-${IMAGE_REF}}"
-    - echo "Supply-chain target image: ${IMAGE_TARGET}"
+    - 'echo "Supply-chain target image: ${IMAGE_TARGET}"'
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
   interruptible: true
@@ -183,7 +238,7 @@ sbom-generate:
   script:
     - syft version
     - syft "${IMAGE_TARGET}" -o cyclonedx-json=sbom.json
-    - echo "SBOM component count: $(jq '.components | length' sbom.json)"
+    - 'echo "SBOM component count: $(jq ''.components | length'' sbom.json)"'
   artifacts:
     name: "sbom-${CI_PROJECT_NAME}-${CI_COMMIT_SHORT_SHA}"
     paths:
@@ -291,11 +346,13 @@ trigger-deployment-promotion:
     - |
       set -eu
       : "${DEPLOYMENT_TRIGGER_TOKEN:?DEPLOYMENT_TRIGGER_TOKEN CI/CD variable is not set. A human must create a Pipeline Trigger on the deployment project (Settings > CI/CD > Pipeline triggers) and store its token as a masked+protected variable of this name -- see utilities/ci-templates/image-supply-chain.gitlab-ci.yml and deployment/.gitlab-ci.yml's promote-dev job.}"
-      echo "Triggering deployment promotion: app=${CI_PROJECT_NAME} tag=${CI_COMMIT_SHA}"
+      : "${IMAGE_REPOSITORY:?IMAGE_REPOSITORY not set (build.env dotenv missing)}"
+      echo "Triggering deployment promotion: app=${CI_PROJECT_NAME} image=${IMAGE_REPOSITORY}:${CI_COMMIT_SHA}"
       curl --fail-with-body -sS -X POST \
         --form token="${DEPLOYMENT_TRIGGER_TOKEN}" \
         --form ref=main \
         --form "variables[PROMOTED_APP]=${CI_PROJECT_NAME}" \
+        --form "variables[PROMOTED_IMAGE_REPOSITORY]=${IMAGE_REPOSITORY}" \
         --form "variables[PROMOTED_IMAGE_TAG]=${CI_COMMIT_SHA}" \
         "${CI_SERVER_URL}/api/v4/projects/microservices1691715%2Fdeployment/trigger/pipeline"
       echo "Triggered."
