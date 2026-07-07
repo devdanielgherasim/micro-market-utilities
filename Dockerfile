@@ -103,6 +103,32 @@ RUN set -eux; \
 
 CMD ["bash"]
 
+# ── terraform-aws: aws + Terraform CLI ───────────────────────────────────────
+# Used as the CI image for infrastructure/kubernetes-infrastructure pipelines.
+FROM aws AS terraform-aws
+
+ENV TERRAFORM_VERSION=1.12.2
+
+RUN set -eux; \
+    case "$(uname -m)" in \
+      x86_64)  arch="amd64" ;; \
+      aarch64) arch="arm64" ;; \
+      *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL \
+      "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_${arch}.zip" \
+      -o terraform.zip; \
+    curl -fsSL \
+      "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_SHA256SUMS" \
+      -o SHA256SUMS; \
+    grep "terraform_${TERRAFORM_VERSION}_linux_${arch}.zip" SHA256SUMS | sha256sum -c -; \
+    unzip terraform.zip; \
+    install -m 0755 terraform /usr/local/bin/terraform; \
+    rm -f terraform.zip SHA256SUMS terraform; \
+    terraform version
+
+CMD ["bash"]
+
 # ── azure: base + Azure CLI ───────────────────────────────────────────────────
 FROM base AS azure
 
