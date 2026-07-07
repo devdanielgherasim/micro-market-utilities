@@ -29,6 +29,18 @@ Frontend jobs that don't need this image (plain `npm`/`node` steps) run
 directly on `node:20-alpine` instead — `${CI_TOOLS_IMAGE}` is only used for
 this image's Docker-build/supply-chain/cloud-login steps.
 
+The canonical job-image location for consuming repos is GitLab Container
+Registry:
+
+```text
+registry.gitlab.com/microservices1691715/utilities/ci-base-<cloud>:latest
+```
+
+The same image is also mirrored to the active cloud registry for convenience,
+but GitLab SaaS runners cannot use a private ECR/ACR/Artifact Registry image as
+the job image before the job starts and authenticates. Keep `${CI_TOOLS_IMAGE}`
+pointed at the GitLab Registry copy.
+
 ### Supply-chain toolchain (pinned + checksum-verified)
 
 The Dockerfile also bakes in the image-signing toolchain used by
@@ -85,8 +97,9 @@ include:
   SHA a service image was actually tagged with).
 
 Consuming repos need `CLOUD_PROVIDER`, `ENVIRONMENT`, `PROJECT_NAMESPACE`,
-`CI_TOOLS_IMAGE`, and the cloud-specific auth variables their own `build.sh`
-already requires (see each service's `.gitlab-ci.yml`).
+`CI_TOOLS_IMAGE` pointing at this repo's GitLab Registry image, and the
+cloud-specific auth variables their own `build.sh` already requires (see each
+service's `.gitlab-ci.yml`).
 
 ## Building/pushing the image
 
@@ -108,11 +121,13 @@ across all four app repos rather than building one image:
   micro-market-frontend` (overridable via `$SERVICES`).
 
 This repo's own `.gitlab-ci.yml` (separate from `ci-templates/`) builds and
-pushes all three cloud images (`ci-base-aws`, `ci-base-azure`, `ci-base-gcp`)
-in a single `build-ci-images` job: GitLab Secret-Detection included,
+pushes the selected cloud image (`ci-base-aws`, `ci-base-azure`, or
+`ci-base-gcp`) in a `build-ci-images` job: GitLab Secret-Detection included,
 cloud-aware login logic inlined (same aws/azure/gcp branches as above), each
-target tagged `$CI_COMMIT_SHA` and — on `main` only — also `latest`. The job
-is `rules: when: manual`. Run once per cloud by setting `CLOUD_PROVIDER`.
+target tagged `$CI_COMMIT_SHA` and — on `main` only — also `latest`. The image
+is pushed both to the active cloud registry and to this repo's GitLab Container
+Registry. The job is `rules: when: manual`. Run once per cloud by setting
+`CLOUD_PROVIDER`.
 
 ## Known inconsistencies
 
