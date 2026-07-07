@@ -103,23 +103,30 @@ build-ci-images:
       echo "${CI_REGISTRY_PASSWORD}" | docker login "${CI_REGISTRY}" -u "${CI_REGISTRY_USER}" --password-stdin
 
       # Build and push the cloud-specific service image (ci-base-<cloud>) to the cloud registry
+      # and to GitLab Container Registry. Service pipelines use the GitLab copy
+      # as their job image because SaaS runners must pull it before cloud login.
       TARGET="${CLOUD_PROVIDER}"
       case "${CLOUD_PROVIDER}" in
         aws) IMAGE_REF="${CONTAINER_REGISTRY_NAME}/${PROJECT_NAMESPACE}/${ENVIRONMENT}/ci-base-${TARGET}" ;;
         gcp) IMAGE_REF="${CONTAINER_REGISTRY_NAME}/${PROJECT_NAMESPACE}-${ENVIRONMENT}/ci-base-${TARGET}" ;;
         *)   IMAGE_REF="${CONTAINER_REGISTRY_NAME}/ci-base-${TARGET}" ;;
       esac
+      GITLAB_IMAGE_REF="${CI_REGISTRY_IMAGE}/ci-base-${TARGET}"
       echo "==> Building ci-base-${TARGET} → ${IMAGE_REF}"
       docker build \
         --target "${TARGET}" \
         --cache-from "${IMAGE_REF}:latest" \
         --build-arg BUILDKIT_INLINE_CACHE=1 \
         -t "${IMAGE_REF}:${CI_COMMIT_SHA}" \
+        -t "${GITLAB_IMAGE_REF}:${CI_COMMIT_SHA}" \
         .
       docker push "${IMAGE_REF}:${CI_COMMIT_SHA}"
+      docker push "${GITLAB_IMAGE_REF}:${CI_COMMIT_SHA}"
       if [ "${CI_COMMIT_BRANCH}" = "main" ]; then
         docker tag "${IMAGE_REF}:${CI_COMMIT_SHA}" "${IMAGE_REF}:latest"
+        docker tag "${GITLAB_IMAGE_REF}:${CI_COMMIT_SHA}" "${GITLAB_IMAGE_REF}:latest"
         docker push "${IMAGE_REF}:latest"
+        docker push "${GITLAB_IMAGE_REF}:latest"
       fi
     - |
       # Build and push terraform-aws to GitLab Container Registry (no auth chicken-and-egg)
