@@ -28,6 +28,9 @@ inputs:
   container-registry-name:
     description: Override the computed registry host (rarely needed).
     required: false
+  image-name:
+    description: Override the image name; defaults to the GitHub repository name.
+    required: false
 
 outputs:
   container-registry-name:
@@ -58,11 +61,13 @@ runs:
         GCP_REGION: ${{ inputs.gcp-region }}
         CONTAINER_REGISTRY_NAME: ${{ inputs.container-registry-name }}
         REPO_NAME: ${{ github.event.repository.name }}
+        IMAGE_NAME: ${{ inputs.image-name }}
         COMMIT_SHA: ${{ github.sha }}
       run: |
         set -eu
         : "${CLOUD_PROVIDER:?}" "${ENVIRONMENT:?}" "${PROJECT_NAMESPACE:?}"
         : "${REPO_NAME:?}" "${COMMIT_SHA:?}"
+        IMAGE_NAME="${IMAGE_NAME:-${REPO_NAME}}"
 
         if [ -z "${CONTAINER_REGISTRY_NAME:-}" ]; then
           case "${CLOUD_PROVIDER}" in
@@ -85,7 +90,7 @@ runs:
           gcp)   IMAGE_GROUP="${PROJECT_NAMESPACE}-${ENVIRONMENT}" ;;
         esac
 
-        IMAGE_REPOSITORY="${CONTAINER_REGISTRY_NAME}/${IMAGE_GROUP}/${REPO_NAME}"
+        IMAGE_REPOSITORY="${CONTAINER_REGISTRY_NAME}/${IMAGE_GROUP}/${IMAGE_NAME}"
         IMAGE_REF="${IMAGE_REPOSITORY}:${COMMIT_SHA}"
 
         IMAGE_DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE_REF}" 2>/dev/null || true)"

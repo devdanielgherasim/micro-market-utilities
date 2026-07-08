@@ -154,6 +154,7 @@ set_common_repo_secrets() {
 
     case "${CLOUD_PROVIDER}" in
       aws)
+        set_repo_secret "${repo}" "AWS_ACCOUNT_ID" "${AWS_ACCOUNT_ID:-}"
         set_repo_secret "${repo}" "AWS_ROLE_ARN" "${AWS_ROLE_ARN:-}"
         set_repo_secret "${repo}" "AWS_REGION" "${AWS_REGION}"
         ;;

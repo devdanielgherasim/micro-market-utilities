@@ -49,6 +49,10 @@ on:
         description: "owner/repo of the deployment repo, e.g. my-org/deployment"
         type: string
         required: true
+      promoted-app:
+        description: App/chart name to send to the deployment repo; defaults to the caller repository name.
+        type: string
+        default: ""
       trivy-severity:
         type: string
         default: "HIGH,CRITICAL"
@@ -264,12 +268,14 @@ jobs:
         env:
           DISPATCH_TOKEN: ${{ secrets.DEPLOYMENT_DISPATCH_PAT }}
           DEPLOYMENT_REPO: ${{ inputs.deployment-repo }}
-          PROMOTED_APP: ${{ github.event.repository.name }}
+          PROMOTED_APP_INPUT: ${{ inputs.promoted-app }}
+          REPOSITORY_NAME: ${{ github.event.repository.name }}
           PROMOTED_IMAGE_REPOSITORY: ${{ inputs.image-repository }}
           PROMOTED_IMAGE_TAG: ${{ github.sha }}
         run: |
           set -eu
-          : "${DISPATCH_TOKEN:?DEPLOYMENT_DISPATCH_PAT secret is not set. Create a fine-grained PAT scoped to the deployment repo's contents and store it as a repo secret of this name (see utilities/.github/workflows/image-supply-chain.yml and deployment/.github/workflows/promote-dev.yml).}"
+          : "${DISPATCH_TOKEN:?DEPLOYMENT_DISPATCH_PAT secret is not set. Create a fine-grained PAT scoped to the deployment repo contents and store it as a repo secret of this name.}"
+          PROMOTED_APP="${PROMOTED_APP_INPUT:-${REPOSITORY_NAME}}"
           echo "Triggering deployment promotion: app=${PROMOTED_APP} image=${PROMOTED_IMAGE_REPOSITORY}:${PROMOTED_IMAGE_TAG}"
           curl --fail-with-body -sS -X POST \
             -H "Accept: application/vnd.github+json" \
