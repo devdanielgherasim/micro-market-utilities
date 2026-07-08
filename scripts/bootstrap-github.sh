@@ -67,6 +67,7 @@ CLOUD_PROVIDER="${CLOUD_PROVIDER:-aws}"
 ENVIRONMENT="${ENVIRONMENT:-dev}"
 PROJECT_NAMESPACE="${PROJECT_NAMESPACE:-danielgherasim-microservices}"
 AWS_REGION="${AWS_REGION:-eu-central-1}"
+GCP_REGION="${GCP_REGION:-europe-west3}"
 
 require_cmd() {
   command -v "${1}" >/dev/null 2>&1 || die "${1} is not installed. Install it first."
@@ -134,12 +135,47 @@ set_repo_secret() {
   echo -e "    ${GREEN}+${NC} ${repo}: ${key}"
 }
 
+# Set (or update) a single repo variable. Mirrors set_repo_secret() above, but
+# for plain config values that aren't sensitive -- gh variable set instead of
+# gh secret set, so the value stays visible in the GitHub UI and un-masked in
+# Actions logs.
+set_repo_variable() {
+  local repo="${1}" key="${2}" value="${3}"
+  if [[ -z "${value}" ]]; then
+    warn "Skipping ${key} on ${repo} (empty value)"
+    return
+  fi
+  printf '%s' "${value}" | gh variable set "${key}" --repo "${GITHUB_ORG}/${repo}" >/dev/null
+  echo -e "    ${GREEN}+${NC} ${repo}: ${key}"
+}
+
 # GitHub repo names use a "micro-market-" prefix (micro-market-frontend already
 # had it on GitLab; the others are renamed on GitHub -- see
 # Sources/plans/2026-07-08-gitlab-to-github-migration.md).
 SERVICE_REPOS=(micro-market-catalog micro-market-orders micro-market-audit micro-market-frontend)
 ALL_APP_REPOS=(micro-market-catalog micro-market-orders micro-market-audit micro-market-frontend micro-market-deployment)
 
+# Non-sensitive config: plain strings with hardcoded fallback defaults already
+# visible in plaintext in every consuming ci.yml (e.g.
+# ${{ vars.CLOUD_PROVIDER || 'aws' }}). These go through gh variable set, not
+# gh secret set -- masking them in logs / hiding them from the UI buys nothing.
+set_common_repo_variables() {
+  echo
+  echo "========================================"
+  info "Setting common CI variables on app repos"
+  echo "========================================"
+
+  local repo
+  for repo in "${ALL_APP_REPOS[@]}"; do
+    set_repo_variable "${repo}" "CLOUD_PROVIDER" "${CLOUD_PROVIDER}"
+    set_repo_variable "${repo}" "ENVIRONMENT" "${ENVIRONMENT}"
+    set_repo_variable "${repo}" "PROJECT_NAMESPACE" "${PROJECT_NAMESPACE}"
+    set_repo_variable "${repo}" "AWS_REGION" "${AWS_REGION}"
+    set_repo_variable "${repo}" "GCP_REGION" "${GCP_REGION}"
+  done
+}
+
+# Genuinely sensitive per-cloud-provider credentials: these stay as secrets.
 set_common_repo_secrets() {
   echo
   echo "========================================"
@@ -148,15 +184,10 @@ set_common_repo_secrets() {
 
   local repo
   for repo in "${ALL_APP_REPOS[@]}"; do
-    set_repo_secret "${repo}" "CLOUD_PROVIDER" "${CLOUD_PROVIDER}"
-    set_repo_secret "${repo}" "ENVIRONMENT" "${ENVIRONMENT}"
-    set_repo_secret "${repo}" "PROJECT_NAMESPACE" "${PROJECT_NAMESPACE}"
-
     case "${CLOUD_PROVIDER}" in
       aws)
         set_repo_secret "${repo}" "AWS_ACCOUNT_ID" "${AWS_ACCOUNT_ID:-}"
         set_repo_secret "${repo}" "AWS_ROLE_ARN" "${AWS_ROLE_ARN:-}"
-        set_repo_secret "${repo}" "AWS_REGION" "${AWS_REGION}"
         ;;
       azure)
         set_repo_secret "${repo}" "AZURE_CLIENT_ID" "${ARM_CLIENT_ID:-}"
@@ -270,6 +301,7 @@ ensure_github_aws_oidc_trust() {
 info "GitHub bootstrap (additive) for cloud provider: ${CLOUD_PROVIDER}"
 prompt_github_inputs
 ensure_github_aws_oidc_trust
+set_common_repo_variables
 set_common_repo_secrets
 distribute_deployment_dispatch_pat
 persist_github_inputs
