@@ -128,25 +128,29 @@ CMD ["bash"]
 # ("jammy") base of eclipse-temurin:21-jdk-jammy.
 FROM base AS azure
 
-ENV AZURE_CLI_VERSION=2.88.0
+ENV AZURE_CLI_VERSION=2.88.0 \
+    MICROSOFT_GPG_FINGERPRINT=BC528686B50D79E339D3721CEB3E94ADBE1229CF
+
+COPY ci-keys/microsoft.asc /tmp/microsoft.asc
 
 RUN set -eux; \
-    mkdir -p /etc/apt/keyrings; \
-    tmp_key="$(mktemp)"; \
-    curl -fsSLo "${tmp_key}" \
-      --retry 8 \
-      --retry-all-errors \
-      --retry-delay 5 \
-      --connect-timeout 20 \
-      https://packages.microsoft.com/keys/microsoft.asc; \
-    test -s "${tmp_key}"; \
-    gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg "${tmp_key}"; \
-    rm -f "${tmp_key}"; \
+    install -d -m 0755 /etc/apt/keyrings; \
+    actual_fingerprint="$(gpg --show-keys --with-colons /tmp/microsoft.asc | awk -F: '$1 == "fpr" { print $10; exit }')"; \
+    test "${actual_fingerprint}" = "${MICROSOFT_GPG_FINGERPRINT}"; \
+    gpg --batch --yes --dearmor -o /etc/apt/keyrings/microsoft.gpg /tmp/microsoft.asc; \
+    rm -f /tmp/microsoft.asc; \
     chmod go+r /etc/apt/keyrings/microsoft.gpg; \
     printf 'Types: deb\nURIs: https://packages.microsoft.com/repos/azure-cli/\nSuites: jammy\nComponents: main\nArchitectures: %s\nSigned-by: /etc/apt/keyrings/microsoft.gpg\n' "$(dpkg --print-architecture)" \
       > /etc/apt/sources.list.d/azure-cli.sources; \
-    apt-get update -o Acquire::Retries=5 && \
-    apt-get install -y --no-install-recommends -o Acquire::Retries=5 "azure-cli=${AZURE_CLI_VERSION}-1~jammy" && \
+    apt-get update \
+      -o Acquire::Retries=8 \
+      -o Acquire::http::Timeout=60 \
+      -o Acquire::https::Timeout=60 && \
+    apt-get install -y --no-install-recommends \
+      -o Acquire::Retries=8 \
+      -o Acquire::http::Timeout=60 \
+      -o Acquire::https::Timeout=60 \
+      "azure-cli=${AZURE_CLI_VERSION}-1~jammy" && \
     apt-get clean && rm -rf /var/lib/apt/lists/* && \
     az version
 
