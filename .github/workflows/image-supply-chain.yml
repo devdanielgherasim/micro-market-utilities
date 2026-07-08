@@ -6,10 +6,10 @@
 # and pushed, then hands the promoted tag to the `deployment` repo via
 # repository_dispatch.
 #
-# TODO: replace the "YOUR_GH_ORG" placeholder below (in the `uses:` lines that
-# reference this repo's own composite actions) with the real GitHub
-# org/username once the `utilities` repo exists on GitHub — `uses:` cannot
-# take an expression, so this can't be parameterized at runtime.
+# Cross-references to this repo's own composite actions below are hardcoded
+# to devdanielgherasim/micro-market-utilities@main (`uses:` cannot take an
+# expression, so this can't be parameterized at runtime). Update both if the
+# org or repo is ever renamed.
 #
 # Caller contract: the caller job must run BEFORE invoking this workflow:
 #   1. cloud-registry-login + the actual image build/push
@@ -86,7 +86,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Cloud registry login
-        uses: YOUR_GH_ORG/utilities/.github/actions/cloud-registry-login@main
+        uses: devdanielgherasim/micro-market-utilities/.github/actions/cloud-registry-login@main
         with:
           cloud-provider: ${{ inputs.cloud-provider }}
           container-registry-name: ${{ inputs.container-registry-name }}
@@ -116,7 +116,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Cloud registry login
-        uses: YOUR_GH_ORG/utilities/.github/actions/cloud-registry-login@main
+        uses: devdanielgherasim/micro-market-utilities/.github/actions/cloud-registry-login@main
         with:
           cloud-provider: ${{ inputs.cloud-provider }}
           container-registry-name: ${{ inputs.container-registry-name }}
@@ -158,7 +158,7 @@ jobs:
     needs: [trivy-scan, sbom-generate]
     steps:
       - name: Cloud registry login
-        uses: YOUR_GH_ORG/utilities/.github/actions/cloud-registry-login@main
+        uses: devdanielgherasim/micro-market-utilities/.github/actions/cloud-registry-login@main
         with:
           cloud-provider: ${{ inputs.cloud-provider }}
           container-registry-name: ${{ inputs.container-registry-name }}
@@ -195,7 +195,7 @@ jobs:
     needs: [cosign-sign]
     steps:
       - name: Cloud registry login
-        uses: YOUR_GH_ORG/utilities/.github/actions/cloud-registry-login@main
+        uses: devdanielgherasim/micro-market-utilities/.github/actions/cloud-registry-login@main
         with:
           cloud-provider: ${{ inputs.cloud-provider }}
           container-registry-name: ${{ inputs.container-registry-name }}
@@ -211,7 +211,7 @@ jobs:
       - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
 
       - id: identity
-        uses: YOUR_GH_ORG/utilities/.github/actions/cosign-verify-identity@main
+        uses: devdanielgherasim/micro-market-utilities/.github/actions/cosign-verify-identity@main
         with:
           workflow-file: ${{ inputs.cosign-workflow-file }}
 

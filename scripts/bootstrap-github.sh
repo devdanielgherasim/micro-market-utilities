@@ -106,7 +106,7 @@ prompt_github_inputs() {
 
   echo
   echo "  DEPLOYMENT_DISPATCH_PAT: a fine-grained PAT scoped ONLY to the"
-  echo "  '${GITHUB_ORG}/deployment' repo, 'Contents: Read and write' permission."
+  echo "  '${GITHUB_ORG}/micro-market-deployment' repo, 'Contents: Read and write' permission."
   echo "  Create one at: https://github.com/settings/personal-access-tokens/new"
   echo
   _prompt_if_empty DEPLOYMENT_DISPATCH_PAT "DEPLOYMENT_DISPATCH_PAT (paste the token)" true true
@@ -134,8 +134,11 @@ set_repo_secret() {
   echo -e "    ${GREEN}+${NC} ${repo}: ${key}"
 }
 
-SERVICE_REPOS=(catalog orders audit micro-market-frontend)
-ALL_APP_REPOS=(catalog orders audit micro-market-frontend deployment)
+# GitHub repo names use a "micro-market-" prefix (micro-market-frontend already
+# had it on GitLab; the others are renamed on GitHub -- see
+# Sources/plans/2026-07-08-gitlab-to-github-migration.md).
+SERVICE_REPOS=(micro-market-catalog micro-market-orders micro-market-audit micro-market-frontend)
+ALL_APP_REPOS=(micro-market-catalog micro-market-orders micro-market-audit micro-market-frontend micro-market-deployment)
 
 set_common_repo_secrets() {
   echo
@@ -228,7 +231,7 @@ ensure_github_aws_oidc_trust() {
 
   local github_subjects repo new_policy
   github_subjects="[]"
-  for repo in "${ALL_APP_REPOS[@]}" infrastructure kubernetes-infrastructure platform-gitops utilities; do
+  for repo in "${ALL_APP_REPOS[@]}" micro-market-infrastructure micro-market-kubernetes-infrastructure micro-market-platform-gitops micro-market-utilities; do
     github_subjects=$(echo "${github_subjects}" | jq --arg s "repo:${GITHUB_ORG}/${repo}:ref:refs/heads/main" '. + [$s]')
   done
 
