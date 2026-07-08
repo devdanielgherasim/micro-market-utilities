@@ -135,12 +135,8 @@ RUN set -eux; \
     curl -sLS https://packages.microsoft.com/keys/microsoft.asc \
       | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg; \
     chmod go+r /etc/apt/keyrings/microsoft.gpg; \
-    echo "Types: deb
-URIs: https://packages.microsoft.com/repos/azure-cli/
-Suites: jammy
-Components: main
-Architectures: $(dpkg --print-architecture)
-Signed-by: /etc/apt/keyrings/microsoft.gpg" > /etc/apt/sources.list.d/azure-cli.sources; \
+    printf 'Types: deb\nURIs: https://packages.microsoft.com/repos/azure-cli/\nSuites: jammy\nComponents: main\nArchitectures: %s\nSigned-by: /etc/apt/keyrings/microsoft.gpg\n' "$(dpkg --print-architecture)" \
+      > /etc/apt/sources.list.d/azure-cli.sources; \
     apt-get update && \
     apt-get install -y --no-install-recommends "azure-cli=${AZURE_CLI_VERSION}-1~jammy" && \
     apt-get clean && rm -rf /var/lib/apt/lists/* && \
