@@ -11,7 +11,8 @@ inputs:
     description: aws | azure | gcp
     required: true
   container-registry-name:
-    required: true
+    description: Registry host. For AWS this may be omitted and will be derived from STS caller identity.
+    required: false
   aws-role-arn:
     required: false
   aws-region:
@@ -31,6 +32,11 @@ inputs:
     required: false
     default: europe-west3
 
+outputs:
+  container-registry-name:
+    description: Resolved registry host used for docker login.
+    value: ${{ steps.aws-login.outputs.container-registry-name || steps.azure-login.outputs.container-registry-name || steps.gcp-login.outputs.container-registry-name }}
+
 runs:
   using: composite
   steps:
@@ -41,14 +47,20 @@ runs:
         aws-region: ${{ inputs.aws-region }}
 
     - if: ${{ inputs.cloud-provider == 'aws' }}
+      id: aws-login
       shell: bash
       env:
         AWS_REGION: ${{ inputs.aws-region }}
         REGISTRY: ${{ inputs.container-registry-name }}
       run: |
         set -eu
+        if [ -z "${REGISTRY:-}" ]; then
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          REGISTRY="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        fi
         aws ecr get-login-password --region "${AWS_REGION}" \
           | docker login --username AWS --password-stdin "${REGISTRY}"
+        echo "container-registry-name=${REGISTRY}" >> "${GITHUB_OUTPUT}"
 
     - if: ${{ inputs.cloud-provider == 'azure' }}
       uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
@@ -58,13 +70,16 @@ runs:
         subscription-id: ${{ inputs.azure-subscription-id }}
 
     - if: ${{ inputs.cloud-provider == 'azure' }}
+      id: azure-login
       shell: bash
       env:
         REGISTRY: ${{ inputs.container-registry-name }}
       run: |
         set -eu
+        : "${REGISTRY:?container-registry-name is required for Azure registry login}"
         acr_name="$(echo "${REGISTRY}" | sed 's/\.azurecr\.io$//')"
         az acr login --name "${acr_name}"
+        echo "container-registry-name=${REGISTRY}" >> "${GITHUB_OUTPUT}"
 
     - if: ${{ inputs.cloud-provider == 'gcp' }}
       uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
@@ -76,9 +91,12 @@ runs:
       uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2.2.1
 
     - if: ${{ inputs.cloud-provider == 'gcp' }}
+      id: gcp-login
       shell: bash
       env:
         GCP_REGION: ${{ inputs.gcp-region }}
+        REGISTRY: ${{ inputs.container-registry-name }}
       run: |
         set -eu
         gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+        echo "container-registry-name=${REGISTRY}" >> "${GITHUB_OUTPUT}"
