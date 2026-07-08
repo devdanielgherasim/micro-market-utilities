@@ -2,9 +2,10 @@
 # finalize-github-repo.sh - final per-repo GitHub cutover step.
 #
 # This script is intentionally narrow: it configures GitHub repository
-# code-security settings through the GitHub REST API, optionally disables
-# CodeQL default setup for repos that use the shared advanced CodeQL workflow,
-# verifies the settings, and can then push the local repo to origin/main.
+# code-security settings and main-branch protection through the GitHub REST API,
+# optionally disables CodeQL default setup for repos that use the shared advanced
+# CodeQL workflow, verifies the settings, and can then push the local repo to
+# origin/main.
 #
 # Usage:
 #   GITHUB_ORG=devdanielgherasim \
@@ -132,6 +133,38 @@ JSON
   fi
 }
 
+configure_branch_protection() {
+  info "Protecting main branch for ${repo_full_name}"
+
+  local payload
+  payload="$(cat <<'JSON'
+{
+  "required_status_checks": null,
+  "enforce_admins": false,
+  "required_pull_request_reviews": null,
+  "restrictions": null,
+  "required_linear_history": false,
+  "allow_force_pushes": false,
+  "allow_deletions": false,
+  "block_creations": false,
+  "required_conversation_resolution": false,
+  "lock_branch": false,
+  "allow_fork_syncing": true
+}
+JSON
+)"
+
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    echo "[dry-run] gh api --method PUT repos/${repo_full_name}/branches/main/protection --input -"
+    echo "${payload}"
+  else
+    gh api \
+      --method PUT \
+      "repos/${repo_full_name}/branches/main/protection" \
+      --input - <<<"${payload}" >/dev/null
+  fi
+}
+
 disable_default_codeql_if_requested() {
   [[ "${DISABLE_DEFAULT_CODEQL}" == "true" ]] || return 0
 
@@ -177,6 +210,24 @@ verify_security_settings() {
   fi
 }
 
+verify_branch_protection() {
+  info "Verifying main branch protection for ${repo_full_name}"
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    echo "[dry-run] gh api repos/${repo_full_name}/branches/main/protection"
+    return 0
+  fi
+
+  local protection_json force_pushes deletions
+  protection_json="$(gh api "repos/${repo_full_name}/branches/main/protection")"
+  force_pushes="$(echo "${protection_json}" | jq -r '.allow_force_pushes.enabled')"
+  deletions="$(echo "${protection_json}" | jq -r '.allow_deletions.enabled')"
+
+  [[ "${force_pushes}" == "false" ]] || die "Expected allow_force_pushes.enabled=false, got ${force_pushes}."
+  [[ "${deletions}" == "false" ]] || die "Expected allow_deletions.enabled=false, got ${deletions}."
+
+  success "main_branch_protected=true, allow_force_pushes=${force_pushes}, allow_deletions=${deletions}"
+}
+
 push_repo_if_requested() {
   [[ "${PUSH}" == "true" ]] || return 0
 
@@ -199,8 +250,10 @@ push_repo_if_requested() {
 }
 
 configure_security_settings
+configure_branch_protection
 disable_default_codeql_if_requested
 verify_security_settings
+verify_branch_protection
 push_repo_if_requested
 
 success "GitHub finalization complete for ${repo_full_name}"
