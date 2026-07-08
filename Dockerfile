@@ -118,40 +118,24 @@ RUN terraform version
 CMD ["bash"]
 
 # ── azure: base + Azure CLI ───────────────────────────────────────────────────
-# Pinned + GPG-key-verified (Microsoft apt repo signing key), matching the
-# pinning discipline used for trivy/syft/cosign above. Replaces the previous
-# `curl https://aka.ms/InstallAzureCLIDeb | bash` one-liner, which always
-# installed whatever the *latest* azure-cli happened to be at build time
-# (floating, unpinned, unreproducible).
+# Installed via pip in an isolated virtual environment instead of the Microsoft
+# apt repository, which suffers from persistent TLS timeouts in CI builds.
+# pip install is deterministic with a pinned version and avoids the unreliable
+# packages.microsoft.com apt endpoint entirely.
 # AZURE_CLI_VERSION verified 2026-07-08 against learn.microsoft.com's Azure
-# CLI release notes. Package suffix `-1~jammy` matches the Ubuntu 22.04
-# ("jammy") base of eclipse-temurin:21-jdk-jammy.
+# CLI release notes.
 FROM base AS azure
 
-ENV AZURE_CLI_VERSION=2.88.0 \
-    MICROSOFT_GPG_FINGERPRINT=BC528686B50D79E339D3721CEB3E94ADBE1229CF
-
-COPY ci-keys/microsoft.asc /tmp/microsoft.asc
+ENV AZURE_CLI_VERSION=2.88.0
 
 RUN set -eux; \
-    install -d -m 0755 /etc/apt/keyrings; \
-    actual_fingerprint="$(gpg --show-keys --with-colons /tmp/microsoft.asc | awk -F: '$1 == "fpr" { print $10; exit }')"; \
-    test "${actual_fingerprint}" = "${MICROSOFT_GPG_FINGERPRINT}"; \
-    gpg --batch --yes --dearmor -o /etc/apt/keyrings/microsoft.gpg /tmp/microsoft.asc; \
-    rm -f /tmp/microsoft.asc; \
-    chmod go+r /etc/apt/keyrings/microsoft.gpg; \
-    printf 'Types: deb\nURIs: https://packages.microsoft.com/repos/azure-cli/\nSuites: jammy\nComponents: main\nArchitectures: %s\nSigned-by: /etc/apt/keyrings/microsoft.gpg\n' "$(dpkg --print-architecture)" \
-      > /etc/apt/sources.list.d/azure-cli.sources; \
-    apt-get update \
-      -o Acquire::Retries=8 \
-      -o Acquire::http::Timeout=60 \
-      -o Acquire::https::Timeout=60 && \
-    apt-get install -y --no-install-recommends \
-      -o Acquire::Retries=8 \
-      -o Acquire::http::Timeout=60 \
-      -o Acquire::https::Timeout=60 \
-      "azure-cli=${AZURE_CLI_VERSION}-1~jammy" && \
-    apt-get clean && rm -rf /var/lib/apt/lists/* && \
+    apt-get update && apt-get install -y --no-install-recommends \
+      python3-pip \
+      python3-venv && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*; \
+    python3 -m venv /opt/azure-cli; \
+    /opt/azure-cli/bin/pip install --no-cache-dir "azure-cli==${AZURE_CLI_VERSION}"; \
+    ln -s /opt/azure-cli/bin/az /usr/local/bin/az; \
     az version
 
 CMD ["bash"]
