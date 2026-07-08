@@ -42,10 +42,13 @@ runs:
 
     - if: ${{ inputs.cloud-provider == 'aws' }}
       shell: bash
+      env:
+        AWS_REGION: ${{ inputs.aws-region }}
+        REGISTRY: ${{ inputs.container-registry-name }}
       run: |
         set -eu
-        aws ecr get-login-password --region "${{ inputs.aws-region }}" \
-          | docker login --username AWS --password-stdin "${{ inputs.container-registry-name }}"
+        aws ecr get-login-password --region "${AWS_REGION}" \
+          | docker login --username AWS --password-stdin "${REGISTRY}"
 
     - if: ${{ inputs.cloud-provider == 'azure' }}
       uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
@@ -56,9 +59,11 @@ runs:
 
     - if: ${{ inputs.cloud-provider == 'azure' }}
       shell: bash
+      env:
+        REGISTRY: ${{ inputs.container-registry-name }}
       run: |
         set -eu
-        acr_name="$(echo "${{ inputs.container-registry-name }}" | sed 's/\.azurecr\.io$//')"
+        acr_name="$(echo "${REGISTRY}" | sed 's/\.azurecr\.io$//')"
         az acr login --name "${acr_name}"
 
     - if: ${{ inputs.cloud-provider == 'gcp' }}
@@ -72,6 +77,8 @@ runs:
 
     - if: ${{ inputs.cloud-provider == 'gcp' }}
       shell: bash
+      env:
+        GCP_REGION: ${{ inputs.gcp-region }}
       run: |
         set -eu
-        gcloud auth configure-docker "${{ inputs.gcp-region }}-docker.pkg.dev" --quiet
+        gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet

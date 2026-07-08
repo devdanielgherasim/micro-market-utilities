@@ -100,7 +100,10 @@ jobs:
           gcp-region: ${{ inputs.gcp-region }}
 
       - name: Log resolved image reference
-        run: echo "Scanning digest ${{ inputs.image-digest }} (tag ref ${{ inputs.image-ref }})"
+        env:
+          IMAGE_DIGEST: ${{ inputs.image-digest }}
+          IMAGE_REF: ${{ inputs.image-ref }}
+        run: echo "Scanning digest ${IMAGE_DIGEST} (tag ref ${IMAGE_REF})"
         shell: bash
 
       - name: Trivy scan
@@ -185,10 +188,11 @@ jobs:
       - name: Cosign sign + attest
         env:
           COSIGN_YES: "true"
+          IMAGE_DIGEST: ${{ inputs.image-digest }}
         run: |
           set -eu
-          cosign sign --yes "${{ inputs.image-digest }}"
-          cosign attest --yes --predicate sbom.json --type cyclonedx "${{ inputs.image-digest }}"
+          cosign sign --yes "${IMAGE_DIGEST}"
+          cosign attest --yes --predicate sbom.json --type cyclonedx "${IMAGE_DIGEST}"
 
   # ---------------------------------------------------------------------------
   # cosign-verify (promote gate): verify the signature and SBOM attestation
@@ -220,21 +224,25 @@ jobs:
           workflow-file: ${{ inputs.cosign-workflow-file }}
 
       - name: Verify signature + SBOM attestation
+        env:
+          IMAGE_DIGEST: ${{ inputs.image-digest }}
+          OIDC_ISSUER: ${{ steps.identity.outputs.issuer }}
+          OIDC_IDENTITY: ${{ steps.identity.outputs.identity }}
         run: |
           set -eu
-          echo "Verifying signature for ${{ inputs.image-digest }}"
-          echo "  issuer:   ${{ steps.identity.outputs.issuer }}"
-          echo "  identity: ${{ steps.identity.outputs.identity }}"
+          echo "Verifying signature for ${IMAGE_DIGEST}"
+          echo "  issuer:   ${OIDC_ISSUER}"
+          echo "  identity: ${OIDC_IDENTITY}"
           cosign verify \
-            --certificate-oidc-issuer "${{ steps.identity.outputs.issuer }}" \
-            --certificate-identity "${{ steps.identity.outputs.identity }}" \
-            "${{ inputs.image-digest }}"
+            --certificate-oidc-issuer "${OIDC_ISSUER}" \
+            --certificate-identity "${OIDC_IDENTITY}" \
+            "${IMAGE_DIGEST}"
           echo "Verifying CycloneDX SBOM attestation"
           cosign verify-attestation \
             --type cyclonedx \
-            --certificate-oidc-issuer "${{ steps.identity.outputs.issuer }}" \
-            --certificate-identity "${{ steps.identity.outputs.identity }}" \
-            "${{ inputs.image-digest }}" > /dev/null
+            --certificate-oidc-issuer "${OIDC_ISSUER}" \
+            --certificate-identity "${OIDC_IDENTITY}" \
+            "${IMAGE_DIGEST}" > /dev/null
           echo "cosign verify gate PASSED."
 
   # ---------------------------------------------------------------------------

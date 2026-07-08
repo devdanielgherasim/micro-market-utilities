@@ -63,6 +63,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SEVERITY_GATE: ${{ inputs.severity-gate }}
           REF: ${{ github.ref }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -eu
           # CodeQL alerts can take a few seconds to become queryable via the
@@ -70,14 +71,14 @@ jobs:
           # briefly instead of racing it.
           attempt=0
           until [ "${attempt}" -ge 6 ]; do
-            if gh api "repos/${{ github.repository }}/code-scanning/analyses?ref=${REF}" 2>/dev/null | jq -e 'length > 0' >/dev/null 2>&1; then
+            if gh api "repos/${REPOSITORY}/code-scanning/analyses?ref=${REF}" 2>/dev/null | jq -e 'length > 0' >/dev/null 2>&1; then
               break
             fi
             attempt=$((attempt + 1))
             sleep 5
           done
 
-          alerts_json="$(gh api "repos/${{ github.repository }}/code-scanning/alerts?state=open&ref=${REF}" --paginate 2>/dev/null || echo '[]')"
+          alerts_json="$(gh api "repos/${REPOSITORY}/code-scanning/alerts?state=open&ref=${REF}" --paginate 2>/dev/null || echo '[]')"
           findings="$(echo "${alerts_json}" | jq -r --arg wanted "${SEVERITY_GATE}" '
             .[]
             | ((.rule.security_severity_level // "unknown") | ascii_downcase) as $s
