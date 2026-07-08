@@ -1,0 +1,77 @@
+name: Cloud registry login
+description: >
+  OIDC-based docker login to the active cloud's container registry (AWS ECR /
+  Azure ACR / GCP Artifact Registry). Replaces GitLab's .registry-login /
+  .supply-chain-base before_script (ci-templates/image-supply-chain.gitlab-ci.yml),
+  using the standard cloud auth actions instead of hand-rolled OIDC token
+  exchange. Requires the caller job to declare `permissions: id-token: write`.
+
+inputs:
+  cloud-provider:
+    description: aws | azure | gcp
+    required: true
+  container-registry-name:
+    required: true
+  aws-role-arn:
+    required: false
+  aws-region:
+    required: false
+    default: eu-central-1
+  azure-client-id:
+    required: false
+  azure-tenant-id:
+    required: false
+  azure-subscription-id:
+    required: false
+  gcp-workload-identity-provider:
+    required: false
+  gcp-service-account-email:
+    required: false
+  gcp-region:
+    required: false
+    default: europe-west3
+
+runs:
+  using: composite
+  steps:
+    - if: ${{ inputs.cloud-provider == 'aws' }}
+      uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+      with:
+        role-to-assume: ${{ inputs.aws-role-arn }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - if: ${{ inputs.cloud-provider == 'aws' }}
+      shell: bash
+      run: |
+        set -eu
+        aws ecr get-login-password --region "${{ inputs.aws-region }}" \
+          | docker login --username AWS --password-stdin "${{ inputs.container-registry-name }}"
+
+    - if: ${{ inputs.cloud-provider == 'azure' }}
+      uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        subscription-id: ${{ inputs.azure-subscription-id }}
+
+    - if: ${{ inputs.cloud-provider == 'azure' }}
+      shell: bash
+      run: |
+        set -eu
+        acr_name="$(echo "${{ inputs.container-registry-name }}" | sed 's/\.azurecr\.io$//')"
+        az acr login --name "${acr_name}"
+
+    - if: ${{ inputs.cloud-provider == 'gcp' }}
+      uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
+      with:
+        workload_identity_provider: ${{ inputs.gcp-workload-identity-provider }}
+        service_account: ${{ inputs.gcp-service-account-email }}
+
+    - if: ${{ inputs.cloud-provider == 'gcp' }}
+      uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2.2.1
+
+    - if: ${{ inputs.cloud-provider == 'gcp' }}
+      shell: bash
+      run: |
+        set -eu
+        gcloud auth configure-docker "${{ inputs.gcp-region }}-docker.pkg.dev" --quiet

@@ -1,0 +1,10 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # Every third-party action referenced by SHA (image-supply-chain.yml,
+    # security-scan-gate.yml, cloud-registry-login/action.yml) gets a PR to
+    # bump the pin when Dependabot sees a new release, so SHA bumps are
+    # reviewed rather than hand-tracked.

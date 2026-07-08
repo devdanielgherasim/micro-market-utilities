@@ -1,0 +1,119 @@
+# =============================================================================
+# security-scan-gate.yml (reusable workflow)
+# -----------------------------------------------------------------------------
+# GitHub Actions replacement for ci-templates/security-scan-gate.gitlab-ci.yml.
+#
+# GitLab's version centralized its Free-tier SAST/Dependency-Scanning/Secret-
+# Detection managed templates and turned them into a hard pipeline gate via a
+# hand-rolled jq parse of their JSON reports (since GitLab Free doesn't gate on
+# its own findings). GitHub has no 1:1 managed-template equivalent, so each
+# scanner is replaced individually:
+#   * SAST              -> CodeQL, gated the same way (query the code-scanning
+#                          alerts API for this ref, fail on HIGH/CRITICAL —
+#                          mirrors the old jq-report-gate approach against a
+#                          different data source).
+#   * Dependency scanning -> actions/dependency-review-action. Note: this only
+#                          works on pull_request diffs (GitHub has no push-
+#                          triggered equivalent) — the continuous/push-based
+#                          case is covered instead by Dependabot alerts, which
+#                          are free and automatic on public repos (enabled at
+#                          the repo-settings level in Phase 1, no workflow
+#                          needed for that part).
+#   * Secret detection  -> gitleaks-action, which already hard-fails on any
+#                          finding (no severity levels to parse, simpler than
+#                          the old jq-severity logic for this one scanner).
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      codeql-languages:
+        description: CodeQL language identifier(s), e.g. "java-kotlin" or "javascript-typescript"
+        type: string
+        required: true
+      severity-gate:
+        description: Comma-separated CodeQL security-severity levels that fail the gate
+        type: string
+        default: "critical,high"
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+  pull-requests: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # codeql: SAST replacement. Runs CodeQL's default analysis, then queries the
+  # code-scanning alerts API for this ref and fails on critical/high findings.
+  # ---------------------------------------------------------------------------
+  codeql:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ inputs.codeql-languages }}
+
+      - uses: github/codeql-action/analyze@v3
+
+      - name: Fail on findings at or above the severity gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SEVERITY_GATE: ${{ inputs.severity-gate }}
+          REF: ${{ github.ref }}
+        run: |
+          set -eu
+          # CodeQL alerts can take a few seconds to become queryable via the
+          # REST API right after `analyze` finishes uploading SARIF; poll
+          # briefly instead of racing it.
+          attempt=0
+          until [ "${attempt}" -ge 6 ]; do
+            if gh api "repos/${{ github.repository }}/code-scanning/analyses?ref=${REF}" 2>/dev/null | jq -e 'length > 0' >/dev/null 2>&1; then
+              break
+            fi
+            attempt=$((attempt + 1))
+            sleep 5
+          done
+
+          alerts_json="$(gh api "repos/${{ github.repository }}/code-scanning/alerts?state=open&ref=${REF}" --paginate 2>/dev/null || echo '[]')"
+          findings="$(echo "${alerts_json}" | jq -r --arg wanted "${SEVERITY_GATE}" '
+            .[]
+            | ((.rule.security_severity_level // "unknown") | ascii_downcase) as $s
+            | select($wanted | ascii_downcase | split(",") | index($s))
+            | "  - [\(.rule.security_severity_level)] \(.rule.description) @ \(.most_recent_instance.location.path)"
+          ')"
+
+          if [ -n "${findings}" ]; then
+            echo "Security gate FAILED: CodeQL findings at [${SEVERITY_GATE}]:" >&2
+            printf '%s\n' "${findings}" >&2
+            exit 1
+          fi
+          echo "CodeQL gate PASSED: no findings at [${SEVERITY_GATE}] for ${REF}."
+
+  # ---------------------------------------------------------------------------
+  # dependency-review: dependency-scanning replacement. PR-diff only (GitHub
+  # limitation, see header comment) — no-op on push events.
+  # ---------------------------------------------------------------------------
+  dependency-review:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
+  # ---------------------------------------------------------------------------
+  # gitleaks: secret-detection replacement. Any finding is a hard fail.
+  # ---------------------------------------------------------------------------
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

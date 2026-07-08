@@ -1,0 +1,40 @@
+name: Cosign GitHub identity
+description: >
+  Derives the expected Fulcio certificate identity + OIDC issuer for cosign
+  keyless sign/verify on GitHub Actions, for a specific workflow file and ref.
+  Both the sign step and the verify step must call this action and use its
+  outputs, rather than inlining the identity string twice, so the two can
+  never drift apart (replaces the single hard-coded GitLab-format identity
+  string previously shared implicitly between cosign-sign/cosign-verify in
+  ci-templates/image-supply-chain.gitlab-ci.yml).
+
+inputs:
+  workflow-file:
+    description: Workflow filename that performed the signing, e.g. ci.yml
+    required: true
+  ref:
+    description: Git ref the signing workflow ran on
+    required: false
+    default: ${{ github.ref }}
+
+outputs:
+  identity:
+    value: ${{ steps.derive.outputs.identity }}
+  issuer:
+    value: ${{ steps.derive.outputs.issuer }}
+
+runs:
+  using: composite
+  steps:
+    - id: derive
+      shell: bash
+      env:
+        REPOSITORY: ${{ github.repository }}
+        WORKFLOW_FILE: ${{ inputs.workflow-file }}
+        REF: ${{ inputs.ref }}
+      run: |
+        set -eu
+        {
+          echo "identity=https://github.com/${REPOSITORY}/.github/workflows/${WORKFLOW_FILE}@${REF}"
+          echo "issuer=https://token.actions.githubusercontent.com"
+        } >> "${GITHUB_OUTPUT}"
