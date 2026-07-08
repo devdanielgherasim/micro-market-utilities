@@ -113,6 +113,7 @@ configure_security_settings() {
 {
   "visibility": "public",
   "security_and_analysis": {
+    "dependency_graph": { "status": "enabled" },
     "secret_scanning": { "status": "enabled" },
     "secret_scanning_push_protection": { "status": "enabled" }
   }
@@ -153,17 +154,19 @@ verify_security_settings() {
     return 0
   fi
 
-  local repo_json visibility secret_scanning push_protection
+  local repo_json visibility dependency_graph secret_scanning push_protection
   repo_json="$(gh api "repos/${repo_full_name}")"
   visibility="$(echo "${repo_json}" | jq -r '.visibility')"
+  dependency_graph="$(echo "${repo_json}" | jq -r '.security_and_analysis.dependency_graph.status // "unavailable"')"
   secret_scanning="$(echo "${repo_json}" | jq -r '.security_and_analysis.secret_scanning.status // "unavailable"')"
   push_protection="$(echo "${repo_json}" | jq -r '.security_and_analysis.secret_scanning_push_protection.status // "unavailable"')"
 
   [[ "${visibility}" == "public" ]] || die "Expected visibility=public, got ${visibility}."
+  [[ "${dependency_graph}" == "enabled" ]] || die "Expected dependency_graph=enabled, got ${dependency_graph}."
   [[ "${secret_scanning}" == "enabled" ]] || die "Expected secret_scanning=enabled, got ${secret_scanning}."
   [[ "${push_protection}" == "enabled" ]] || die "Expected secret_scanning_push_protection=enabled, got ${push_protection}."
 
-  success "visibility=${visibility}, secret_scanning=${secret_scanning}, push_protection=${push_protection}"
+  success "visibility=${visibility}, dependency_graph=${dependency_graph}, secret_scanning=${secret_scanning}, push_protection=${push_protection}"
 
   if [[ "${DISABLE_DEFAULT_CODEQL}" == "true" ]]; then
     local default_setup_json default_setup_state
