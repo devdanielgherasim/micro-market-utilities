@@ -56,6 +56,9 @@ jobs:
         with:
           languages: ${{ inputs.codeql-languages }}
 
+      - uses: github/codeql-action/autobuild@v4
+        if: ${{ contains(inputs.codeql-languages, 'java') || contains(inputs.codeql-languages, 'c-cpp') || contains(inputs.codeql-languages, 'csharp') }}
+
       - uses: github/codeql-action/analyze@v4
 
       - name: Fail on findings at or above the severity gate
