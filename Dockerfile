@@ -132,13 +132,21 @@ ENV AZURE_CLI_VERSION=2.88.0
 
 RUN set -eux; \
     mkdir -p /etc/apt/keyrings; \
-    curl -sLS https://packages.microsoft.com/keys/microsoft.asc \
-      | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg; \
+    tmp_key="$(mktemp)"; \
+    curl -fsSLo "${tmp_key}" \
+      --retry 8 \
+      --retry-all-errors \
+      --retry-delay 5 \
+      --connect-timeout 20 \
+      https://packages.microsoft.com/keys/microsoft.asc; \
+    test -s "${tmp_key}"; \
+    gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg "${tmp_key}"; \
+    rm -f "${tmp_key}"; \
     chmod go+r /etc/apt/keyrings/microsoft.gpg; \
     printf 'Types: deb\nURIs: https://packages.microsoft.com/repos/azure-cli/\nSuites: jammy\nComponents: main\nArchitectures: %s\nSigned-by: /etc/apt/keyrings/microsoft.gpg\n' "$(dpkg --print-architecture)" \
       > /etc/apt/sources.list.d/azure-cli.sources; \
-    apt-get update && \
-    apt-get install -y --no-install-recommends "azure-cli=${AZURE_CLI_VERSION}-1~jammy" && \
+    apt-get update -o Acquire::Retries=5 && \
+    apt-get install -y --no-install-recommends -o Acquire::Retries=5 "azure-cli=${AZURE_CLI_VERSION}-1~jammy" && \
     apt-get clean && rm -rf /var/lib/apt/lists/* && \
     az version
 
