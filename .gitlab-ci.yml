@@ -21,12 +21,16 @@ variables:
 #   CLOUD_PROVIDER=gcp   → pushes to Artifact Registry
 build-ci-images:
   stage: build
-  image: docker:latest
+  # Pinned (was `docker:latest` / `docker:dind` — floating tags with no
+  # reproducibility guarantee). 29 verified current stable Docker Engine
+  # series as of 2026-07-08; client and dind service kept on the same major
+  # version per GitLab's docker-in-docker guidance.
+  image: docker:29
   id_tokens:
     GITLAB_OIDC_TOKEN:
       aud: https://gitlab.com
   services:
-    - docker:dind
+    - docker:29-dind
   before_script:
     - apk add --no-cache bash curl jq aws-cli python3 py3-pip
     - |
@@ -58,7 +62,7 @@ build-ci-images:
           : "${ARM_CLIENT_ID:?Set ARM_CLIENT_ID for Azure registry login}"
           if [ "${ARM_USE_OIDC:-false}" = "true" ]; then
             : "${ARM_TENANT_ID:?Set ARM_TENANT_ID for Azure OIDC login}"
-            python3 -m pip install --break-system-packages --no-cache-dir azure-cli
+            python3 -m pip install --break-system-packages --no-cache-dir "azure-cli==2.88.0"
             az login --service-principal \
               --username "${ARM_CLIENT_ID}" \
               --tenant "${ARM_TENANT_ID}" \
@@ -145,8 +149,16 @@ build-ci-images:
           docker push "${TF_IMAGE_REF}:latest"
         fi
       fi
+  # Was three separate rule entries (`when: manual`, `allow_failure: false`,
+  # `exists: [Dockerfile]`) — GitLab evaluates `rules:` top-to-bottom and
+  # stops at the first matching entry. The first entry (`when: manual`, no
+  # condition) matched unconditionally, so `allow_failure: false` and the
+  # `exists: [Dockerfile]` guard were dead configuration: the job was
+  # unconditionally manual, defaulted to `allow_failure: true` (GitLab's
+  # default for manual jobs), and ran even without a Dockerfile present.
+  # Merged into one rule so the explicit allow_failure actually applies.
   rules:
-    - when: manual
-    - allow_failure: false
     - exists:
         - Dockerfile
+      when: manual
+      allow_failure: false

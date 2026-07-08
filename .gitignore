@@ -1,0 +1,8 @@
+# Local persistent agent plans
+/plans/
+
+# Local assistant/tool state
+/.claude/
+
+# Local bootstrap secrets
+/scripts/.env.bootstrap

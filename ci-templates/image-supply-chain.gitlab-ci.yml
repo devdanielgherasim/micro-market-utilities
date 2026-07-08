@@ -220,14 +220,19 @@
   interruptible: true
 
 # -----------------------------------------------------------------------------
-# trivy-scan: fail the pipeline on any CRITICAL vulnerability in the pushed image.
+# trivy-scan: fail the pipeline on any HIGH/CRITICAL vulnerability in the
+# pushed image. Severity list matches security-scan-gate.gitlab-ci.yml's
+# SECURITY_GATE_SEVERITIES ("high critical") so the image-level gate is no
+# weaker than the app-level (SAST/Dependency/Secret) gate it sits alongside.
+# Previously CRITICAL-only, which silently let HIGH-severity image
+# vulnerabilities ship.
 # -----------------------------------------------------------------------------
 trivy-scan:
   extends: .supply-chain-base
   stage: sign
   script:
     - trivy --version
-    - trivy image --no-progress --exit-code 1 --severity CRITICAL --timeout 15m "${IMAGE_TARGET}"
+    - trivy image --no-progress --exit-code 1 --severity HIGH,CRITICAL --timeout 15m "${IMAGE_TARGET}"
 
 # -----------------------------------------------------------------------------
 # sbom-generate: produce a CycloneDX SBOM and keep it as a pipeline artifact.

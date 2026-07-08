@@ -36,7 +36,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ---------------------------------------------------------------------------
 # Supply-chain security toolchain (pinned + SHA256-verified).
 # Versions and checksums verified 2026-07-03 against each project's upstream
-# release tag and published checksums.txt. Do NOT float to `latest`.
+# release tag and published checksums.txt; re-confirmed still current
+# (no newer upstream tag) as of 2026-07-08. Do NOT float to `latest`.
 #   Trivy  0.72.0  (aquasecurity/trivy)  — container/fs vulnerability scanner
 #   Syft   1.46.0  (anchore/syft)        — SBOM generator (CycloneDX)
 #   Cosign 3.1.1   (sigstore/cosign)     — keyless signing (Fulcio/Rekor)
@@ -87,7 +88,7 @@ CMD ["bash"]
 # ── aws: base + AWS CLI v2 ────────────────────────────────────────────────────
 FROM base AS aws
 
-ENV AWSCLI_VERSION=2.22.0
+ENV AWSCLI_VERSION=2.35.17
 RUN set -eux; \
     case "$(uname -m)" in \
       x86_64)  arch="x86_64" ;; \
@@ -106,7 +107,9 @@ CMD ["bash"]
 # ── terraform-aws: aws + Terraform CLI ───────────────────────────────────────
 # Used as the CI image for infrastructure/kubernetes-infrastructure pipelines.
 # Copies the terraform binary directly from the official image — no separate download needed.
-FROM hashicorp/terraform:1.12 AS terraform-binary
+# 1.15 verified 2026-07-08: minor-version bump within the Terraform v1.x
+# Compatibility Promises (no breaking CLI/state changes vs 1.12).
+FROM hashicorp/terraform:1.15 AS terraform-binary
 
 FROM aws AS terraform-aws
 COPY --from=terraform-binary /bin/terraform /usr/local/bin/terraform
@@ -115,11 +118,33 @@ RUN terraform version
 CMD ["bash"]
 
 # ── azure: base + Azure CLI ───────────────────────────────────────────────────
+# Pinned + GPG-key-verified (Microsoft apt repo signing key), matching the
+# pinning discipline used for trivy/syft/cosign above. Replaces the previous
+# `curl https://aka.ms/InstallAzureCLIDeb | bash` one-liner, which always
+# installed whatever the *latest* azure-cli happened to be at build time
+# (floating, unpinned, unreproducible).
+# AZURE_CLI_VERSION verified 2026-07-08 against learn.microsoft.com's Azure
+# CLI release notes. Package suffix `-1~jammy` matches the Ubuntu 22.04
+# ("jammy") base of eclipse-temurin:21-jdk-jammy.
 FROM base AS azure
 
-RUN apt-get update && \
-    curl -fsSL https://aka.ms/InstallAzureCLIDeb | bash && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+ENV AZURE_CLI_VERSION=2.88.0
+
+RUN set -eux; \
+    mkdir -p /etc/apt/keyrings; \
+    curl -sLS https://packages.microsoft.com/keys/microsoft.asc \
+      | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg; \
+    chmod go+r /etc/apt/keyrings/microsoft.gpg; \
+    echo "Types: deb
+URIs: https://packages.microsoft.com/repos/azure-cli/
+Suites: jammy
+Components: main
+Architectures: $(dpkg --print-architecture)
+Signed-by: /etc/apt/keyrings/microsoft.gpg" > /etc/apt/sources.list.d/azure-cli.sources; \
+    apt-get update && \
+    apt-get install -y --no-install-recommends "azure-cli=${AZURE_CLI_VERSION}-1~jammy" && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* && \
+    az version
 
 CMD ["bash"]
 
