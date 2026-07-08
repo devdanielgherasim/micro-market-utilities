@@ -99,6 +99,10 @@ jobs:
           gcp-service-account-email: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
           gcp-region: ${{ inputs.gcp-region }}
 
+      - name: Log resolved image reference
+        run: echo "Scanning digest ${{ inputs.image-digest }} (tag ref ${{ inputs.image-ref }})"
+        shell: bash
+
       - name: Trivy scan
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
