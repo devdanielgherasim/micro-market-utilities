@@ -35,6 +35,10 @@ on:
         description: Comma-separated CodeQL security-severity levels that fail the gate
         type: string
         default: "critical,high"
+      java-version:
+        description: JDK version used when CodeQL autobuilds Java/Kotlin projects.
+        type: string
+        default: "21"
 
 permissions:
   contents: read
@@ -55,6 +59,12 @@ jobs:
       - uses: github/codeql-action/init@v4
         with:
           languages: ${{ inputs.codeql-languages }}
+
+      - uses: actions/setup-java@v4
+        if: ${{ contains(inputs.codeql-languages, 'java') }}
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
 
       - uses: github/codeql-action/autobuild@v4
         if: ${{ contains(inputs.codeql-languages, 'java') || contains(inputs.codeql-languages, 'c-cpp') || contains(inputs.codeql-languages, 'csharp') }}
