@@ -6,3 +6,4 @@
 
 # Local bootstrap secrets
 /scripts/.env.bootstrap
+/scripts/.env.bootstrap.github

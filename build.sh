@@ -1,9 +1,42 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+BOOTSTRAP_ENV_FILE="${BOOTSTRAP_ENV_FILE:-${SCRIPT_DIR}/scripts/.env.bootstrap}"
+
+load_bootstrap_env_defaults() {
+  local old_environment="${ENVIRONMENT-}"
+  local old_project_namespace="${PROJECT_NAMESPACE-}"
+  local old_cloud_provider="${CLOUD_PROVIDER-}"
+  local old_arm_client_id="${ARM_CLIENT_ID-}"
+  local old_arm_client_secret="${ARM_CLIENT_SECRET-}"
+  local old_arm_tenant_id="${ARM_TENANT_ID-}"
+  local old_arm_subscription_id="${ARM_SUBSCRIPTION_ID-}"
+  local old_arm_use_oidc="${ARM_USE_OIDC-}"
+
+  if [[ -f "${BOOTSTRAP_ENV_FILE}" ]]; then
+    # shellcheck source=/dev/null
+    source "${BOOTSTRAP_ENV_FILE}"
+    echo "=== [INFO] Loaded defaults from ${BOOTSTRAP_ENV_FILE} ==="
+  fi
+
+  [[ -n "${old_environment}" ]] && ENVIRONMENT="${old_environment}"
+  [[ -n "${old_project_namespace}" ]] && PROJECT_NAMESPACE="${old_project_namespace}"
+  [[ -n "${old_cloud_provider}" ]] && CLOUD_PROVIDER="${old_cloud_provider}"
+  [[ -n "${old_arm_client_id}" ]] && ARM_CLIENT_ID="${old_arm_client_id}"
+  [[ -n "${old_arm_client_secret}" ]] && ARM_CLIENT_SECRET="${old_arm_client_secret}"
+  [[ -n "${old_arm_tenant_id}" ]] && ARM_TENANT_ID="${old_arm_tenant_id}"
+  [[ -n "${old_arm_subscription_id}" ]] && ARM_SUBSCRIPTION_ID="${old_arm_subscription_id}"
+  [[ -n "${old_arm_use_oidc}" ]] && ARM_USE_OIDC="${old_arm_use_oidc}"
+
+  return 0
+}
+
+load_bootstrap_env_defaults
+
 ENVIRONMENT="${ENVIRONMENT:-prod}"
 PROJECT_NAMESPACE="${PROJECT_NAMESPACE:-danielgherasim-microservices}"
-CLOUD_PROVIDER="${CLOUD_PROVIDER:-aws}"
+CLOUD_PROVIDER="${CLOUD_PROVIDER:-azure}"
 CI_COMMIT_SHA="${CI_COMMIT_SHA:-$(git rev-parse --short HEAD 2>/dev/null || echo local)}"
 SERVICES_RAW="${SERVICES:-audit catalog orders micro-market-frontend}"
 
