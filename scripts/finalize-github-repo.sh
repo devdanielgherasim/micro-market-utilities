@@ -195,7 +195,13 @@ verify_security_settings() {
   push_protection="$(echo "${repo_json}" | jq -r '.security_and_analysis.secret_scanning_push_protection.status // "unavailable"')"
 
   [[ "${visibility}" == "public" ]] || die "Expected visibility=public, got ${visibility}."
-  [[ "${dependency_graph}" == "enabled" ]] || die "Expected dependency_graph=enabled, got ${dependency_graph}."
+  if [[ "${dependency_graph}" == "enabled" ]]; then
+    :
+  elif [[ "${dependency_graph}" == "unavailable" && "${visibility}" == "public" ]]; then
+    warn "dependency_graph status is unavailable in the repo API response; public repositories have dependency graph enabled by GitHub. Continuing."
+  else
+    die "Expected dependency_graph=enabled, got ${dependency_graph}."
+  fi
   [[ "${secret_scanning}" == "enabled" ]] || die "Expected secret_scanning=enabled, got ${secret_scanning}."
   [[ "${push_protection}" == "enabled" ]] || die "Expected secret_scanning_push_protection=enabled, got ${push_protection}."
 
