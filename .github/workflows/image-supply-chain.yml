@@ -56,6 +56,15 @@ on:
       trivy-severity:
         type: string
         default: "HIGH,CRITICAL"
+      trivy-ignore-cves:
+        description: >-
+          Verbatim .trivyignore file contents (CVE IDs, one per line, '#' comments
+          allowed) to exempt from the HIGH/CRITICAL gate below. Leave empty (default)
+          to enforce strictly with no exceptions -- only set this for a documented,
+          reviewed, lab-scope risk acceptance (e.g. an unfixed CVE in an upstream
+          base image that isn't reachable in this container's runtime context).
+        type: string
+        default: ""
       trigger-promotion:
         description: Set false to shadow-run this workflow without firing the deployment dispatch (used during the GitLab/GitHub parallel-run window)
         type: boolean
@@ -110,6 +119,16 @@ jobs:
         run: echo "Scanning digest ${IMAGE_DIGEST} (tag ref ${IMAGE_REF})"
         shell: bash
 
+      # No checkout in this job (it scans an already-pushed image by digest, not
+      # repo source), so a caller-supplied ignore list is written here rather than
+      # read from a committed .trivyignore file.
+      - name: Write trivy ignore list
+        if: ${{ inputs.trivy-ignore-cves != '' }}
+        env:
+          TRIVY_IGNORE_CVES: ${{ inputs.trivy-ignore-cves }}
+        run: printf '%s\n' "${TRIVY_IGNORE_CVES}" > .trivyignore
+        shell: bash
+
       - name: Trivy scan
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -118,6 +137,7 @@ jobs:
           severity: ${{ inputs.trivy-severity }}
           exit-code: "1"
           timeout: 15m0s
+          trivyignores: ${{ inputs.trivy-ignore-cves != '' && '.trivyignore' || '' }}
 
   # ---------------------------------------------------------------------------
   # sbom-generate: produce a CycloneDX SBOM, kept as a workflow artifact for
