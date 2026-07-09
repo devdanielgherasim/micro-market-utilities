@@ -113,11 +113,38 @@ prompt_github_inputs() {
   _prompt_if_empty DEPLOYMENT_DISPATCH_PAT "DEPLOYMENT_DISPATCH_PAT (paste the token)" true true
 }
 
+# -- Azure: resolve the scoped github_ci identity's client ID -------------------
+# IMPORTANT: this is NOT the same identity as ARM_CLIENT_ID (the broad
+# Terraform-bootstrap SP from .env.bootstrap). GitHub Actions must authenticate
+# as the dedicated, AcrPush-only azurerm_user_assigned_identity.github_ci from
+# infrastructure/terraform/azure/identity.tf. Reusing ARM_CLIENT_ID here would
+# silently point every app repo's Azure OIDC login at the wrong (over-broad)
+# identity. Tries `terraform output` first since that identity can be
+# recreated (its client_id changes) independently of this script; falls back
+# to a manual prompt if the state isn't reachable from here.
+resolve_azure_github_ci_client_id() {
+  [[ "${CLOUD_PROVIDER}" == "azure" ]] || return 0
+  [[ -z "${AZURE_GITHUB_CI_CLIENT_ID:-}" ]] || return 0
+
+  local tf_dir="${SCRIPT_DIR}/../../infrastructure/terraform/azure"
+  if [[ -d "${tf_dir}" ]] && command -v terraform >/dev/null 2>&1; then
+    AZURE_GITHUB_CI_CLIENT_ID="$(terraform -chdir="${tf_dir}" output -raw github_ci_client_id 2>/dev/null || true)"
+  fi
+
+  if [[ -z "${AZURE_GITHUB_CI_CLIENT_ID:-}" ]]; then
+    warn "Could not auto-resolve github_ci_client_id via 'terraform output' (${tf_dir})."
+    _prompt_if_empty AZURE_GITHUB_CI_CLIENT_ID "AZURE_GITHUB_CI_CLIENT_ID (github_ci identity's client ID, from 'terraform output github_ci_client_id')"
+  else
+    info "Resolved AZURE_GITHUB_CI_CLIENT_ID=${AZURE_GITHUB_CI_CLIENT_ID} via terraform output"
+  fi
+}
+
 persist_github_inputs() {
   umask 077
   {
     printf 'GITHUB_ORG="%s"\n' "${GITHUB_ORG}"
     printf 'DEPLOYMENT_DISPATCH_PAT="%s"\n' "${DEPLOYMENT_DISPATCH_PAT}"
+    [[ -z "${AZURE_GITHUB_CI_CLIENT_ID:-}" ]] || printf 'AZURE_GITHUB_CI_CLIENT_ID="%s"\n' "${AZURE_GITHUB_CI_CLIENT_ID}"
   } > "${GITHUB_ENV_FILE}"
   chmod 600 "${GITHUB_ENV_FILE}"
   success "GitHub inputs saved to ${GITHUB_ENV_FILE} (chmod 600, gitignored)"
@@ -190,7 +217,7 @@ set_common_repo_secrets() {
         set_repo_secret "${repo}" "AWS_ROLE_ARN" "${AWS_ROLE_ARN:-}"
         ;;
       azure)
-        set_repo_secret "${repo}" "AZURE_CLIENT_ID" "${ARM_CLIENT_ID:-}"
+        set_repo_secret "${repo}" "AZURE_CLIENT_ID" "${AZURE_GITHUB_CI_CLIENT_ID:-}"
         set_repo_secret "${repo}" "AZURE_TENANT_ID" "${ARM_TENANT_ID:-}"
         set_repo_secret "${repo}" "AZURE_SUBSCRIPTION_ID" "${ARM_SUBSCRIPTION_ID:-}"
         ;;
@@ -300,6 +327,7 @@ ensure_github_aws_oidc_trust() {
 # -- main ------------------------------------------------------------------
 info "GitHub bootstrap (additive) for cloud provider: ${CLOUD_PROVIDER}"
 prompt_github_inputs
+resolve_azure_github_ci_client_id
 ensure_github_aws_oidc_trust
 set_common_repo_variables
 set_common_repo_secrets
