@@ -24,6 +24,12 @@ inputs:
     required: false
   azure-subscription-id:
     required: false
+  project-namespace:
+    description: Used to self-derive the ACR name (acr<namespace><environment>.azurecr.io) when container-registry-name is omitted. Required for Azure if container-registry-name isn't set.
+    required: false
+  environment:
+    description: dev | staging | prod. Used with project-namespace to self-derive the ACR name for Azure.
+    required: false
   gcp-workload-identity-provider:
     required: false
   gcp-service-account-email:
@@ -74,9 +80,16 @@ runs:
       shell: bash
       env:
         REGISTRY: ${{ inputs.container-registry-name }}
+        PROJECT_NAMESPACE: ${{ inputs.project-namespace }}
+        ENVIRONMENT: ${{ inputs.environment }}
       run: |
         set -eu
-        : "${REGISTRY:?container-registry-name is required for Azure registry login}"
+        if [ -z "${REGISTRY:-}" ]; then
+          : "${PROJECT_NAMESPACE:?container-registry-name or project-namespace is required for Azure registry login}"
+          : "${ENVIRONMENT:?container-registry-name or environment is required for Azure registry login}"
+          azure_acr_project="$(printf '%s' "${PROJECT_NAMESPACE}" | tr -d '-')"
+          REGISTRY="acr${azure_acr_project}${ENVIRONMENT}.azurecr.io"
+        fi
         acr_name="$(echo "${REGISTRY}" | sed 's/\.azurecr\.io$//')"
         az acr login --name "${acr_name}"
         echo "container-registry-name=${REGISTRY}" >> "${GITHUB_OUTPUT}"
