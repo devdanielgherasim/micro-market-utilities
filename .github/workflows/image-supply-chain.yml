@@ -41,10 +41,6 @@ on:
       gcp-region:
         type: string
         default: europe-west3
-      cosign-workflow-file:
-        description: Filename of the caller's own workflow (used to build the Fulcio identity string)
-        type: string
-        default: ci.yml
       deployment-repo:
         description: "owner/repo of the deployment repo, e.g. my-org/deployment"
         type: string
@@ -245,7 +241,8 @@ jobs:
       - id: identity
         uses: devdanielgherasim/micro-market-utilities/.github/actions/cosign-verify-identity@main
         with:
-          workflow-file: ${{ inputs.cosign-workflow-file }}
+          workflow-repo: devdanielgherasim/micro-market-utilities
+          workflow-file: image-supply-chain.yml
 
       - name: Verify signature + SBOM attestation
         env:

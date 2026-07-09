@@ -9,13 +9,19 @@ description: >
   ci-templates/image-supply-chain.gitlab-ci.yml).
 
 inputs:
+  workflow-repo:
+    description: >
+      GitHub owner/repo that hosts the reusable workflow which performed the
+      signing. For reusable (called) workflows the Fulcio certificate SAN
+      always references the *reusable* workflow's repo, not the caller's.
+    required: true
   workflow-file:
-    description: Workflow filename that performed the signing, e.g. ci.yml
+    description: Workflow filename that performed the signing, e.g. image-supply-chain.yml
     required: true
   ref:
     description: Git ref the signing workflow ran on
     required: false
-    default: ${{ github.ref }}
+    default: refs/heads/main
 
 outputs:
   identity:
@@ -29,7 +35,7 @@ runs:
     - id: derive
       shell: bash
       env:
-        REPOSITORY: ${{ github.repository }}
+        REPOSITORY: ${{ inputs.workflow-repo }}
         WORKFLOW_FILE: ${{ inputs.workflow-file }}
         REF: ${{ inputs.ref }}
       run: |
