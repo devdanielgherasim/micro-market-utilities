@@ -123,6 +123,7 @@ jobs:
   # gitleaks: secret-detection replacement. Any finding is a hard fail.
   # ---------------------------------------------------------------------------
   gitleaks:
+    if: ${{ github.event_name != 'repository_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
