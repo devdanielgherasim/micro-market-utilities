@@ -184,56 +184,108 @@ set_repo_variable() {
 # had it on GitLab; the others are renamed on GitHub -- see
 # Sources/plans/2026-07-08-gitlab-to-github-migration.md).
 SERVICE_REPOS=(micro-market-catalog micro-market-orders micro-market-audit micro-market-frontend)
-ALL_APP_REPOS=(micro-market-catalog micro-market-orders micro-market-audit micro-market-frontend micro-market-deployment)
+APP_AND_DEPLOYMENT_REPOS=(micro-market-catalog micro-market-orders micro-market-audit micro-market-frontend micro-market-deployment)
+INFRASTRUCTURE_REPOS=(micro-market-infrastructure)
 
 # Non-sensitive config: plain strings with hardcoded fallback defaults already
 # visible in plaintext in every consuming ci.yml (e.g.
 # ${{ vars.CLOUD_PROVIDER || 'aws' }}). These go through gh variable set, not
 # gh secret set -- masking them in logs / hiding them from the UI buys nothing.
-set_common_repo_variables() {
+set_base_repo_variables() {
   echo
   echo "========================================"
-  info "Setting common CI variables on app repos"
+  info "Setting base CI variables on GitHub repos"
   echo "========================================"
 
   local repo
-  for repo in "${ALL_APP_REPOS[@]}"; do
+  for repo in "${APP_AND_DEPLOYMENT_REPOS[@]}" "${INFRASTRUCTURE_REPOS[@]}"; do
     set_repo_variable "${repo}" "CLOUD_PROVIDER" "${CLOUD_PROVIDER}"
     set_repo_variable "${repo}" "ENVIRONMENT" "${ENVIRONMENT}"
     set_repo_variable "${repo}" "PROJECT_NAMESPACE" "${PROJECT_NAMESPACE}"
-    set_repo_variable "${repo}" "AWS_REGION" "${AWS_REGION}"
-    set_repo_variable "${repo}" "GCP_REGION" "${GCP_REGION}"
   done
 }
 
-# Genuinely sensitive per-cloud-provider credentials: these stay as secrets.
-set_common_repo_secrets() {
+set_provider_repo_variables() {
   echo
   echo "========================================"
-  info "Setting common CI secrets on app repos"
+  info "Setting ${CLOUD_PROVIDER} CI variables on GitHub repos"
   echo "========================================"
 
   local repo
-  for repo in "${ALL_APP_REPOS[@]}"; do
-    case "${CLOUD_PROVIDER}" in
-      aws)
+  case "${CLOUD_PROVIDER}" in
+    aws)
+      AWS_TF_STATE_BUCKET="${AWS_TF_STATE_BUCKET:-${STATE_BUCKET:-terraform-state-${AWS_ACCOUNT_ID}-${AWS_REGION}}}"
+      for repo in "${APP_AND_DEPLOYMENT_REPOS[@]}"; do
+        set_repo_variable "${repo}" "AWS_REGION" "${AWS_REGION}"
+      done
+      set_repo_variable "micro-market-infrastructure" "AWS_REGION" "${AWS_REGION}"
+      set_repo_variable "micro-market-infrastructure" "AWS_TF_STATE_BUCKET" "${AWS_TF_STATE_BUCKET}"
+      ;;
+    azure)
+      AZURE_TF_STATE_RESOURCE_GROUP="${AZURE_TF_STATE_RESOURCE_GROUP:-${AZURE_STATE_RESOURCE_GROUP:-rg-infrastructure}}"
+      AZURE_TF_STATE_STORAGE_ACCOUNT="${AZURE_TF_STATE_STORAGE_ACCOUNT:-${AZURE_STATE_STORAGE_ACCOUNT:-}}"
+      AZURE_TF_STATE_CONTAINER="${AZURE_TF_STATE_CONTAINER:-${AZURE_STATE_CONTAINER:-tfstate}}"
+      if [[ -z "${AZURE_TF_STATE_STORAGE_ACCOUNT}" ]]; then
+        local sub_part env_part
+        sub_part="$(printf '%s' "${ARM_SUBSCRIPTION_ID}" | tr -d '-' | tr '[:upper:]' '[:lower:]' | cut -c1-12)"
+        env_part="$(printf '%s' "${ENVIRONMENT}" | tr -cd '[:alnum:]' | tr '[:upper:]' '[:lower:]' | cut -c1-5)"
+        AZURE_TF_STATE_STORAGE_ACCOUNT="tfstate${sub_part}${env_part}"
+      fi
+      set_repo_variable "micro-market-infrastructure" "AZURE_TF_STATE_RESOURCE_GROUP" "${AZURE_TF_STATE_RESOURCE_GROUP}"
+      set_repo_variable "micro-market-infrastructure" "AZURE_TF_STATE_STORAGE_ACCOUNT" "${AZURE_TF_STATE_STORAGE_ACCOUNT}"
+      set_repo_variable "micro-market-infrastructure" "AZURE_TF_STATE_CONTAINER" "${AZURE_TF_STATE_CONTAINER}"
+      ;;
+    gcp)
+      for repo in "${APP_AND_DEPLOYMENT_REPOS[@]}"; do
+        set_repo_variable "${repo}" "GCP_REGION" "${GCP_REGION}"
+      done
+      set_repo_variable "micro-market-infrastructure" "GCP_TF_STATE_BUCKET" "${GCP_TF_STATE_BUCKET:-terraformmicroservicesstate}"
+      ;;
+    *)
+      die "Unsupported CLOUD_PROVIDER '${CLOUD_PROVIDER}'"
+      ;;
+  esac
+}
+
+# Genuinely sensitive per-cloud-provider credentials: these stay as secrets.
+set_provider_repo_secrets() {
+  echo
+  echo "========================================"
+  info "Setting ${CLOUD_PROVIDER} CI secrets on GitHub repos"
+  echo "========================================"
+
+  local repo
+  case "${CLOUD_PROVIDER}" in
+    aws)
+      for repo in "${APP_AND_DEPLOYMENT_REPOS[@]}"; do
         set_repo_secret "${repo}" "AWS_ACCOUNT_ID" "${AWS_ACCOUNT_ID:-}"
         set_repo_secret "${repo}" "AWS_ROLE_ARN" "${AWS_ROLE_ARN:-}"
-        ;;
-      azure)
+      done
+      set_repo_secret "micro-market-infrastructure" "AWS_ROLE_ARN" "${AWS_ROLE_ARN:-}"
+      ;;
+    azure)
+      for repo in "${APP_AND_DEPLOYMENT_REPOS[@]}"; do
         set_repo_secret "${repo}" "AZURE_CLIENT_ID" "${AZURE_GITHUB_CI_CLIENT_ID:-}"
         set_repo_secret "${repo}" "AZURE_TENANT_ID" "${ARM_TENANT_ID:-}"
         set_repo_secret "${repo}" "AZURE_SUBSCRIPTION_ID" "${ARM_SUBSCRIPTION_ID:-}"
-        ;;
-      gcp)
+      done
+      set_repo_secret "micro-market-infrastructure" "ARM_CLIENT_ID" "${ARM_CLIENT_ID:-}"
+      set_repo_secret "micro-market-infrastructure" "ARM_TENANT_ID" "${ARM_TENANT_ID:-}"
+      set_repo_secret "micro-market-infrastructure" "ARM_SUBSCRIPTION_ID" "${ARM_SUBSCRIPTION_ID:-}"
+      ;;
+    gcp)
+      for repo in "${APP_AND_DEPLOYMENT_REPOS[@]}"; do
         set_repo_secret "${repo}" "GCP_WORKLOAD_IDENTITY_PROVIDER" "${GCP_WORKLOAD_IDENTITY_PROVIDER:-}"
         set_repo_secret "${repo}" "GCP_SERVICE_ACCOUNT_EMAIL" "${GCP_SERVICE_ACCOUNT_EMAIL:-}"
-        ;;
-      *)
-        die "Unsupported CLOUD_PROVIDER '${CLOUD_PROVIDER}'"
-        ;;
-    esac
-  done
+      done
+      set_repo_secret "micro-market-infrastructure" "GCP_PROJECT_ID" "${GCP_PROJECT_ID:-}"
+      set_repo_secret "micro-market-infrastructure" "GCP_WORKLOAD_IDENTITY_PROVIDER" "${GCP_WORKLOAD_IDENTITY_PROVIDER:-}"
+      set_repo_secret "micro-market-infrastructure" "GCP_SERVICE_ACCOUNT_EMAIL" "${GCP_SERVICE_ACCOUNT_EMAIL:-}"
+      ;;
+    *)
+      die "Unsupported CLOUD_PROVIDER '${CLOUD_PROVIDER}'"
+      ;;
+  esac
 }
 
 distribute_deployment_dispatch_pat() {
@@ -265,6 +317,7 @@ ensure_github_aws_oidc_trust() {
   local caller account_id oidc_provider_arn role_name
   caller=$(aws sts get-caller-identity 2>/dev/null) || die "AWS credentials not configured."
   account_id=$(echo "${caller}" | jq -r '.Account')
+  AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID:-${account_id}}"
   oidc_provider_arn="arn:aws:iam::${account_id}:oidc-provider/token.actions.githubusercontent.com"
   role_name="gitlab-oidc-${PROJECT_NAMESPACE}"
 
@@ -294,7 +347,7 @@ ensure_github_aws_oidc_trust() {
 
   local github_subjects repo new_policy
   github_subjects="[]"
-  for repo in "${ALL_APP_REPOS[@]}" micro-market-infrastructure micro-market-kubernetes-infrastructure micro-market-platform-gitops micro-market-utilities; do
+  for repo in "${APP_AND_DEPLOYMENT_REPOS[@]}" "${INFRASTRUCTURE_REPOS[@]}" micro-market-kubernetes-infrastructure micro-market-platform-gitops micro-market-utilities; do
     github_subjects=$(echo "${github_subjects}" | jq --arg s "repo:${GITHUB_ORG}/${repo}:ref:refs/heads/main" '. + [$s]')
   done
 
@@ -333,8 +386,9 @@ info "GitHub bootstrap (additive) for cloud provider: ${CLOUD_PROVIDER}"
 prompt_github_inputs
 resolve_azure_github_ci_client_id
 ensure_github_aws_oidc_trust
-set_common_repo_variables
-set_common_repo_secrets
+set_base_repo_variables
+set_provider_repo_variables
+set_provider_repo_secrets
 distribute_deployment_dispatch_pat
 persist_github_inputs
 
