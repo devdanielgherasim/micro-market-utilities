@@ -1,12 +1,13 @@
 # =============================================================================
-# Multi-stage CI toolchain image.
+# CI toolchain base image.
 #
-# Build targets (select with --target):
-#   aws    JDK 21 + Maven + Docker CLI + security tools + AWS CLI v2
-#   azure  JDK 21 + Maven + Docker CLI + security tools + Azure CLI
-#   gcp    JDK 21 + Maven + Docker CLI + security tools + gcloud SDK
-#
-# BuildKit builds the base stage once; all three cloud targets reuse it.
+# The aws/azure/gcp/terraform-aws cloud-CLI targets that used to build on top
+# of this base stage were removed once GitLab CI (the only consumer of these
+# images, via `ci-templates/`) was retired — GitHub Actions uses pinned setup
+# actions directly (aws-actions/configure-aws-credentials, azure/login,
+# google-github-actions/auth) instead of a shared toolbox image. This base
+# stage (Java 21/Maven/Docker CLI/trivy/syft/cosign) currently has no
+# consumer either; kept as-is pending a decision on whether to delete it too.
 # =============================================================================
 
 # ── base: JDK 21 + Maven + Docker CLI + supply-chain toolchain ───────────────
@@ -82,73 +83,5 @@ RUN set -eux; \
     install -m 0755 cosign /usr/local/bin/cosign; \
     cd /; rm -rf "${tmp}"; \
     trivy --version; syft version; cosign version
-
-CMD ["bash"]
-
-# ── aws: base + AWS CLI v2 ────────────────────────────────────────────────────
-FROM base AS aws
-
-ENV AWSCLI_VERSION=2.35.17
-RUN set -eux; \
-    case "$(uname -m)" in \
-      x86_64)  arch="x86_64" ;; \
-      aarch64) arch="aarch64" ;; \
-      *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${arch}-${AWSCLI_VERSION}.zip" \
-      -o awscliv2.zip; \
-    unzip -q awscliv2.zip; \
-    ./aws/install; \
-    rm -rf aws awscliv2.zip; \
-    aws --version
-
-CMD ["bash"]
-
-# ── terraform-aws: aws + Terraform CLI ───────────────────────────────────────
-# Used as the CI image for infrastructure/kubernetes-infrastructure pipelines.
-# Copies the terraform binary directly from the official image — no separate download needed.
-# 1.15 verified 2026-07-08: minor-version bump within the Terraform v1.x
-# Compatibility Promises (no breaking CLI/state changes vs 1.12).
-FROM hashicorp/terraform:1.15 AS terraform-binary
-
-FROM aws AS terraform-aws
-COPY --from=terraform-binary /bin/terraform /usr/local/bin/terraform
-RUN terraform version
-
-CMD ["bash"]
-
-# ── azure: base + Azure CLI ───────────────────────────────────────────────────
-# Installed via pip in an isolated virtual environment instead of the Microsoft
-# apt repository, which suffers from persistent TLS timeouts in CI builds.
-# pip install is deterministic with a pinned version and avoids the unreliable
-# packages.microsoft.com apt endpoint entirely.
-# AZURE_CLI_VERSION verified 2026-07-08 against learn.microsoft.com's Azure
-# CLI release notes.
-FROM base AS azure
-
-ENV AZURE_CLI_VERSION=2.88.0
-
-RUN set -eux; \
-    apt-get update && apt-get install -y --no-install-recommends \
-      python3-pip \
-      python3-venv && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*; \
-    python3 -m venv /opt/azure-cli; \
-    /opt/azure-cli/bin/pip install --no-cache-dir "azure-cli==${AZURE_CLI_VERSION}"; \
-    ln -s /opt/azure-cli/bin/az /usr/local/bin/az; \
-    az version
-
-CMD ["bash"]
-
-# ── gcp: base + gcloud SDK ────────────────────────────────────────────────────
-FROM base AS gcp
-
-RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
-      | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
-    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] \
-      https://packages.cloud.google.com/apt cloud-sdk main" \
-      > /etc/apt/sources.list.d/google-cloud-sdk.list && \
-    apt-get update && apt-get install -y --no-install-recommends google-cloud-cli && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 CMD ["bash"]

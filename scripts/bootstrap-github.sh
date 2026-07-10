@@ -1,29 +1,33 @@
 #!/usr/bin/env bash
-# bootstrap-github.sh - provisions the GitHub-side equivalents of what
-# bootstrap.sh currently sets up on GitLab, for the GitLab -> GitHub Actions
-# migration (see Sources/plans/ for the migration plan).
+# bootstrap-github.sh - provisions the GitHub Actions secrets/variables and
+# GitHub-side OIDC trust the project's CI now runs on (see
+# Sources/plans/2026-07-08-gitlab-to-github-migration.md, complete).
 #
-# This is ADDITIVE, not a replacement: bootstrap.sh (GitLab) keeps running
-# untouched throughout the phased migration, and this script only adds the
-# GitHub-side equivalents alongside it. Nothing here removes or rotates any
-# GitLab-side resource.
+# History: this script was originally written as an ADDITIVE companion to
+# bootstrap.sh while GitLab CI was still live during the phased migration.
+# GitLab CI has since been fully retired (.gitlab-ci.yml removed from every
+# repo) and this is now the only live bootstrap path for CI credentials.
+# bootstrap.sh (cloud foundation: IAM role/user, Terraform state backend) is
+# still a prerequisite -- run it first on a fresh cloud, since this script
+# only adds a GitHub OIDC trust statement to the AWS IAM role bootstrap.sh
+# creates, it doesn't create that role itself.
 #
 # What this script does:
-#   1. Sets per-repo GitHub Actions secrets (gh secret set) equivalent to the
-#      GitLab group/project CI/CD variables bootstrap.sh sets today.
-#   2. Distributes DEPLOYMENT_DISPATCH_PAT (the repository_dispatch replacement
-#      for GITLAB's DEPLOYMENT_TRIGGER_TOKEN) to the 4 service repos.
+#   1. Sets per-repo GitHub Actions secrets/variables (gh secret/variable set).
+#   2. Distributes DEPLOYMENT_DISPATCH_PAT (repository_dispatch promotion
+#      trigger) to the 4 service repos.
 #   3. Adds an AWS IAM trust statement for GitHub's OIDC issuer
-#      (token.actions.githubusercontent.com) to the SAME IAM role GitLab's
-#      OIDC already trusts (gitlab-oidc-${PROJECT_NAMESPACE}) -- additive,
-#      GitLab's trust statement is left untouched.
+#      (token.actions.githubusercontent.com) to the IAM role bootstrap.sh
+#      creates (legacy-named gitlab-oidc-${PROJECT_NAMESPACE}, see that
+#      script's header) -- additive, merges rather than overwrites.
 #
 # What this script does NOT do (out of scope, see the migration plan):
 #   - Azure/GCP OIDC re-federation: those are Terraform-managed
 #     (infrastructure/terraform/{azure,gcp}/identity.tf) -- add the new
 #     azurerm_federated_identity_credential.github_ci /
 #     google_iam_workload_identity_pool_provider.github resources there
-#     instead, applied via the still-live GitLab pipeline (Phase 5).
+#     instead, applied via the infrastructure repo's live GitHub Actions
+#     workflow (Phase 5; Azure is live, AWS/GCP design-complete but unapplied).
 #   - Creating the DEPLOYMENT_DISPATCH_PAT itself: GitHub has no CLI/API path
 #     to mint a fine-grained PAT non-interactively. A human must create it at
 #     https://github.com/settings/personal-access-tokens/new, scoped to ONLY
@@ -45,17 +49,17 @@ warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 die()     { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-GITLAB_ENV_FILE="${SCRIPT_DIR}/.env.bootstrap"
+BOOTSTRAP_ENV_FILE="${SCRIPT_DIR}/.env.bootstrap"
 GITHUB_ENV_FILE="${SCRIPT_DIR}/.env.bootstrap.github"
 
 # -- load prior inputs ---------------------------------------------------------
-# Read-only reuse of the GitLab bootstrap's persisted config (cloud provider,
+# Read-only reuse of bootstrap.sh's persisted config (cloud provider,
 # environment, namespace, account IDs) so this script doesn't re-ask for
-# values that are already known and unrelated to which CI provider is used.
-if [[ -f "${GITLAB_ENV_FILE}" ]]; then
+# values that are already known.
+if [[ -f "${BOOTSTRAP_ENV_FILE}" ]]; then
   # shellcheck source=/dev/null
-  source "${GITLAB_ENV_FILE}"
-  info "Loaded shared config from ${GITLAB_ENV_FILE}"
+  source "${BOOTSTRAP_ENV_FILE}"
+  info "Loaded shared config from ${BOOTSTRAP_ENV_FILE}"
 fi
 if [[ -f "${GITHUB_ENV_FILE}" ]]; then
   # shellcheck source=/dev/null
@@ -282,7 +286,7 @@ ensure_github_aws_oidc_trust() {
   fi
 
   if ! aws iam get-role --role-name "${role_name}" >/dev/null 2>&1; then
-    die "IAM role '${role_name}' does not exist yet -- run bootstrap.sh (GitLab) first; this script only adds a trust statement to the role it creates."
+    die "IAM role '${role_name}' does not exist yet -- run bootstrap.sh first; this script only adds a trust statement to the role it creates."
   fi
 
   local current_policy
@@ -340,4 +344,3 @@ echo -e "${GREEN}GitHub bootstrap complete${NC}"
 echo "========================================"
 echo "  Reminder: Azure/GCP GitHub OIDC trust is added via Terraform"
 echo "  (infrastructure/terraform/{azure,gcp}/identity.tf), not this script."
-echo "  Reminder: GitLab's pipelines are untouched and still live."

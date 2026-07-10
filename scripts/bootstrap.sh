@@ -1,21 +1,26 @@
 #!/usr/bin/env bash
-# bootstrap.sh - one-time cloud + GitLab setup for the microservices project.
+# bootstrap.sh - one-time cloud foundation setup for the microservices project.
+#
+# Historical note: this script originally also pushed GitLab CI/CD variables
+# (group + project) and created a GitLab-OIDC-federated AWS IAM role, back
+# when GitLab CI was the live pipeline. GitLab CI has since been retired in
+# favor of GitHub Actions (see Sources/plans/2026-07-08-gitlab-to-github-migration.md)
+# and the GitLab-variable-pushing logic was removed as dead code. The AWS IAM
+# role this script creates is still named `gitlab-oidc-${PROJECT_NAMESPACE}`
+# and is still the LIVE role GitHub Actions authenticates through today --
+# bootstrap-github.sh merges a GitHub OIDC trust statement into this same
+# role rather than creating a new one. Renaming it would be a real AWS
+# change (new role, re-point trust + the AWS_ROLE_ARN secret, delete old);
+# out of scope for this cleanup, so the legacy name stays.
 #
 # Supports:
-#   - CLOUD_PROVIDER=aws   (default): IAM deploy user, GitLab OIDC role, S3 state bucket, GitLab variables.
-#   - CLOUD_PROVIDER=azure: Azure Terraform state backend, Azure auth variables, ACR naming, GitLab variables.
+#   - CLOUD_PROVIDER=aws   (default): IAM deploy user, OIDC role, S3 state bucket.
+#   - CLOUD_PROVIDER=azure: Azure Terraform state backend, Azure auth, ACR naming.
 #
 # Usage:
 #   chmod +x bootstrap.sh
 #   CLOUD_PROVIDER=aws   ENVIRONMENT=dev ./bootstrap.sh
 #   CLOUD_PROVIDER=azure ENVIRONMENT=dev ./bootstrap.sh
-#
-# Required common inputs, prompted interactively when not present in .env.bootstrap:
-#   - GitLab PAT with api scope (for setting CI/CD variables)
-#   - GitLab PAT with read_repository scope (for ArgoCD to pull repos)
-#   - GitLab username
-#   - Let's Encrypt email
-#   - Cloudflare API token + zone ID (optional; press Enter to skip)
 #
 # Azure behavior:
 #   - Uses the active `az login` session for the initial bootstrap.
@@ -57,19 +62,6 @@ CLOUD_PROVIDER="$(echo "${CLOUD_PROVIDER}" | tr '[:upper:]' '[:lower:]')"
 ENVIRONMENT="${ENVIRONMENT:-dev}"
 PROJECT_NAMESPACE="${PROJECT_NAMESPACE:-danielgherasim-microservices}"
 AZURE_SP_NAME="${AZURE_SP_NAME:-sp-${PROJECT_NAMESPACE}-${ENVIRONMENT}-bootstrap}"
-GITLAB_URL="${GITLAB_URL:-https://gitlab.com}"
-GITLAB_GROUP="${GITLAB_GROUP:-microservices1691715}"
-
-# GitLab project paths (used to look up numeric project IDs via API)
-PROJ_INFRASTRUCTURE="${GITLAB_GROUP}/infrastructure"
-PROJ_K8S_INFRA="${GITLAB_GROUP}/kubernetes-infrastructure"
-PROJ_DEPLOYMENT="${GITLAB_GROUP}/deployment"
-PROJ_CATALOG="${GITLAB_GROUP}/catalog"
-PROJ_ORDERS="${GITLAB_GROUP}/orders"
-PROJ_AUDIT="${GITLAB_GROUP}/audit"
-PROJ_FRONTEND="${GITLAB_GROUP}/micro-market-frontend"
-
-SERVICE_PROJECT_IDS=()
 
 case "${CLOUD_PROVIDER}" in
   aws|azure) ;;
@@ -118,23 +110,6 @@ _prompt_if_empty() {
       die "${var_name} is required."
     fi
   fi
-}
-
-prompt_common_inputs() {
-  echo
-  echo "--------------------------------------------------------"
-  echo "  GitLab setup - using .env.bootstrap where available"
-  echo "  Create PATs at: ${GITLAB_URL}/-/user_settings/personal_access_tokens"
-  echo "--------------------------------------------------------"
-  echo
-
-  _prompt_if_empty GITLAB_API_PAT       "GitLab PAT with 'api' scope (to set CI/CD variables)" true true
-  _prompt_if_empty GITLAB_REPO_PAT      "GitLab PAT with 'read_repository' scope (for ArgoCD)" true true
-  _prompt_if_empty GITLAB_USERNAME      "GitLab username"
-  _prompt_if_empty LETSENCRYPT_EMAIL    "Let's Encrypt email [adriangherasim1@gmail.com]" false
-  LETSENCRYPT_EMAIL="${LETSENCRYPT_EMAIL:-adriangherasim1@gmail.com}"
-  _prompt_if_empty CLOUDFLARE_TOKEN     "Cloudflare API token (press Enter to skip)" false true
-  _prompt_if_empty CLOUDFLARE_ZONE_ID   "Cloudflare zone ID   (press Enter to skip)" false
 }
 
 prompt_azure_inputs() {
@@ -198,7 +173,7 @@ ensure_azure_service_principal() {
         --years 1 \
         --query password \
         --output tsv)
-      success "Client secret created; it will be stored as a masked GitLab variable."
+      success "Client secret created; it will be stored in ${ENV_FILE}."
     fi
   else
     info "Creating Azure service principal '${AZURE_SP_NAME}' with Contributor on ${scope}..."
@@ -213,7 +188,7 @@ ensure_azure_service_principal() {
     ARM_CLIENT_SECRET=$(echo "${sp_output}" | jq -r '.password')
     ARM_TENANT_ID="${ARM_TENANT_ID:-$(echo "${sp_output}" | jq -r '.tenant')}"
     success "Service principal created: ${ARM_CLIENT_ID}"
-    warn "The generated secret is shown once by Azure CLI and will be stored in GitLab/.env.bootstrap."
+    warn "The generated secret is shown once by Azure CLI and will be stored in .env.bootstrap."
   fi
 
   ensure_azure_role_assignment "Contributor" "${scope}"
@@ -314,12 +289,6 @@ persist_inputs() {
     printf 'CLOUD_PROVIDER="%s"\n' "${CLOUD_PROVIDER}"
     printf 'ENVIRONMENT="%s"\n' "${ENVIRONMENT}"
     printf 'PROJECT_NAMESPACE="%s"\n' "${PROJECT_NAMESPACE}"
-    printf 'GITLAB_API_PAT="%s"\n' "${GITLAB_API_PAT}"
-    printf 'GITLAB_REPO_PAT="%s"\n' "${GITLAB_REPO_PAT}"
-    printf 'GITLAB_USERNAME="%s"\n' "${GITLAB_USERNAME}"
-    printf 'LETSENCRYPT_EMAIL="%s"\n' "${LETSENCRYPT_EMAIL}"
-    printf 'CLOUDFLARE_TOKEN="%s"\n' "${CLOUDFLARE_TOKEN:-}"
-    printf 'CLOUDFLARE_ZONE_ID="%s"\n' "${CLOUDFLARE_ZONE_ID:-}"
     if [[ "${CLOUD_PROVIDER}" == "azure" ]]; then
       printf 'AZURE_LOCATION="%s"\n' "${AZURE_LOCATION}"
       printf 'AZURE_STATE_RESOURCE_GROUP="%s"\n' "${AZURE_STATE_RESOURCE_GROUP}"
@@ -335,152 +304,6 @@ persist_inputs() {
   } > "${ENV_FILE}"
   chmod 600 "${ENV_FILE}"
   success "Inputs saved to ${ENV_FILE} (chmod 600)"
-}
-
-# -- GitLab API helpers --------------------------------------------------------
-urlencode() {
-  local value="${1}"
-  python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${value}"
-}
-
-gitlab_project_id() {
-  local path="${1}" encoded
-  encoded="$(urlencode "${path}")"
-  curl -sf \
-    --header "PRIVATE-TOKEN: ${GITLAB_API_PAT}" \
-    "${GITLAB_URL}/api/v4/projects/${encoded}" \
-    | jq -r '.id'
-}
-
-gitlab_group_id() {
-  local path="${1}" encoded
-  encoded="$(urlencode "${path}")"
-  curl -sf \
-    --header "PRIVATE-TOKEN: ${GITLAB_API_PAT}" \
-    "${GITLAB_URL}/api/v4/groups/${encoded}" \
-    | jq -r '.id'
-}
-
-# Create or update a variable. Works for both groups and projects.
-# Usage: upsert_var <base_url> <key> <value> [masked=false] [protected=true] [env_scope=*]
-upsert_var() {
-  local base_url="${1}"
-  local key="${2}"
-  local value="${3}"
-  local masked="${4:-false}"
-  local protected="${5:-true}"
-  local env_scope="${6:-*}"
-
-  local encoded_key http_code method url
-  encoded_key="$(urlencode "${key}")"
-  http_code=$(curl -sf -o /dev/null -w "%{http_code}" \
-    --header "PRIVATE-TOKEN: ${GITLAB_API_PAT}" \
-    "${base_url}/${encoded_key}" 2>/dev/null || echo "000")
-
-  method="POST"
-  url="${base_url}"
-  if [[ "${http_code}" == "200" ]]; then
-    method="PUT"
-    url="${base_url}/${encoded_key}"
-  fi
-
-  curl -sf -X "${method}" "${url}" \
-    --header "PRIVATE-TOKEN: ${GITLAB_API_PAT}" \
-    --form "key=${key}" \
-    --form "value=${value}" \
-    --form "masked=${masked}" \
-    --form "protected=${protected}" \
-    --form "environment_scope=${env_scope}" \
-    > /dev/null
-
-  echo -e "    ${GREEN}+${NC} ${key}"
-}
-
-create_trigger_token() {
-  local project_id="${1}"
-  local description="${2:-deployment-promotion}"
-  curl -sf -X POST \
-    --header "PRIVATE-TOKEN: ${GITLAB_API_PAT}" \
-    --form "description=${description}" \
-    "${GITLAB_URL}/api/v4/projects/${project_id}/triggers" \
-    | jq -r '.token'
-}
-
-resolve_gitlab_ids() {
-  echo
-  echo "========================================"
-  info "Resolving GitLab group and project IDs"
-  echo "========================================"
-
-  GROUP_ID=$(gitlab_group_id "${GITLAB_GROUP}") \
-    || die "Could not resolve group '${GITLAB_GROUP}'. Check GITLAB_GROUP and PAT scope."
-  success "Group '${GITLAB_GROUP}' -> ID ${GROUP_ID}"
-
-  info "Resolving project IDs..."
-  PROJ_INFRASTRUCTURE_ID=$(gitlab_project_id "${PROJ_INFRASTRUCTURE}")
-  PROJ_DEPLOYMENT_ID=$(gitlab_project_id "${PROJ_DEPLOYMENT}")
-  PROJ_CATALOG_ID=$(gitlab_project_id "${PROJ_CATALOG}")
-  PROJ_ORDERS_ID=$(gitlab_project_id "${PROJ_ORDERS}")
-  PROJ_AUDIT_ID=$(gitlab_project_id "${PROJ_AUDIT}")
-  PROJ_FRONTEND_ID=$(gitlab_project_id "${PROJ_FRONTEND}")
-  PROJ_K8S_INFRA_ID=$(gitlab_project_id "${PROJ_K8S_INFRA}")
-  SERVICE_PROJECT_IDS=("${PROJ_CATALOG_ID}" "${PROJ_ORDERS_ID}" "${PROJ_AUDIT_ID}" "${PROJ_FRONTEND_ID}")
-  success "All project IDs resolved"
-}
-
-set_common_gitlab_variables() {
-  local group_vars_url="${GITLAB_URL}/api/v4/groups/${GROUP_ID}/variables"
-
-  echo
-  echo "========================================"
-  info "Setting common GitLab group CI/CD variables"
-  echo "========================================"
-
-  upsert_var "${group_vars_url}" "CLOUD_PROVIDER"          "${CLOUD_PROVIDER}"          false false
-  upsert_var "${group_vars_url}" "ENVIRONMENT"             "${ENVIRONMENT}"             false false
-  upsert_var "${group_vars_url}" "PROJECT_NAMESPACE"       "${PROJECT_NAMESPACE}"       false false
-  upsert_var "${group_vars_url}" "CONTAINER_REGISTRY_NAME" "${CONTAINER_REGISTRY_NAME}" false false
-  upsert_var "${group_vars_url}" "GITLAB_ACCESS_TOKEN"     "${GITLAB_REPO_PAT}"         true  true
-  upsert_var "${group_vars_url}" "GITLAB_USERNAME"         "${GITLAB_USERNAME}"         false false
-}
-
-set_kubernetes_project_variables() {
-  local k8s_vars_url="${GITLAB_URL}/api/v4/projects/${PROJ_K8S_INFRA_ID}/variables"
-
-  echo
-  echo "========================================"
-  info "Setting kubernetes-infrastructure project variables"
-  echo "========================================"
-
-  upsert_var "${k8s_vars_url}" "TF_VAR_lets_encrypt_email" "${LETSENCRYPT_EMAIL}" false false
-
-  if [[ -n "${CLOUDFLARE_TOKEN:-}" ]]; then
-    upsert_var "${k8s_vars_url}" "TF_VAR_cloudflare_api_token" "${CLOUDFLARE_TOKEN}"   true  true
-    upsert_var "${k8s_vars_url}" "TF_VAR_cloudflare_zone_id"   "${CLOUDFLARE_ZONE_ID}" false false
-    success "Cloudflare variables set"
-  else
-    warn "Cloudflare variables skipped (no token provided; DNS-01 cert issuance will not work)"
-  fi
-}
-
-create_and_distribute_trigger_token() {
-  echo
-  echo "========================================"
-  info "Creating deployment pipeline trigger token"
-  echo "========================================"
-
-  TRIGGER_TOKEN=$(create_trigger_token "${PROJ_DEPLOYMENT_ID}" "service-promotion")
-  [[ -z "${TRIGGER_TOKEN}" || "${TRIGGER_TOKEN}" == "null" ]] \
-    && die "Failed to create pipeline trigger token in deployment project."
-  success "Pipeline trigger token created"
-
-  info "Setting DEPLOYMENT_TRIGGER_TOKEN in all service repos and deployment..."
-  for project_id in "${SERVICE_PROJECT_IDS[@]}" "${PROJ_DEPLOYMENT_ID}"; do
-    upsert_var \
-      "${GITLAB_URL}/api/v4/projects/${project_id}/variables" \
-      "DEPLOYMENT_TRIGGER_TOKEN" "${TRIGGER_TOKEN}" true true
-  done
-  success "DEPLOYMENT_TRIGGER_TOKEN set"
 }
 
 # -- AWS bootstrap -------------------------------------------------------------
@@ -536,15 +359,16 @@ bootstrap_aws() {
     DEPLOY_ACCESS_KEY_ID=$(echo "${KEY_OUTPUT}" | jq -r '.AccessKey.AccessKeyId')
     DEPLOY_SECRET_ACCESS_KEY=$(echo "${KEY_OUTPUT}" | jq -r '.AccessKey.SecretAccessKey')
     success "Access key created: ${DEPLOY_ACCESS_KEY_ID}"
-    warn "The secret key is shown once. It will be stored in GitLab as a masked variable."
+    warn "The secret key is shown once. It will be stored in ${ENV_FILE}."
   fi
 
   echo
   echo "========================================"
-  info "Creating GitLab OIDC provider and IAM role"
+  info "Creating CI OIDC provider and IAM role (legacy 'gitlab-oidc-*' name, now also trusted by GitHub Actions)"
   echo "========================================"
 
   local gitlab_oidc_url="https://gitlab.com"
+  local gitlab_group="microservices1691715"
   local oidc_provider_arn="arn:aws:iam::${AWS_ACCOUNT_ID}:oidc-provider/gitlab.com"
   local oidc_role_name="gitlab-oidc-${PROJECT_NAMESPACE}"
 
@@ -576,7 +400,7 @@ bootstrap_aws() {
       "Action": "sts:AssumeRoleWithWebIdentity",
       "Condition": {
         "StringLike": {
-          "gitlab.com:sub": "project_path:${GITLAB_GROUP}/*:ref_type:branch:ref:*"
+          "gitlab.com:sub": "project_path:${gitlab_group}/*:ref_type:branch:ref:*"
         },
         "StringEquals": {
           "gitlab.com:aud": "https://gitlab.com"
@@ -643,24 +467,6 @@ TRUST
       }]
     }'
   success "Server-side encryption enabled (AES256)"
-
-  resolve_gitlab_ids
-  set_common_gitlab_variables
-
-  local group_vars_url="${GITLAB_URL}/api/v4/groups/${GROUP_ID}/variables"
-  if [[ -n "${DEPLOY_ACCESS_KEY_ID}" ]]; then
-    upsert_var "${group_vars_url}" "AWS_ACCESS_KEY_ID"     "${DEPLOY_ACCESS_KEY_ID}"     true  true
-    upsert_var "${group_vars_url}" "AWS_SECRET_ACCESS_KEY" "${DEPLOY_SECRET_ACCESS_KEY}" true  true
-  else
-    warn "Skipping AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (existing key kept in GitLab)"
-  fi
-  upsert_var "${group_vars_url}" "AWS_ACCOUNT_ID"      "${AWS_ACCOUNT_ID}" false true
-  upsert_var "${group_vars_url}" "AWS_REGION"          "${AWS_REGION}"     false false
-  upsert_var "${group_vars_url}" "AWS_TF_STATE_BUCKET" "${STATE_BUCKET}"   false false
-  upsert_var "${group_vars_url}" "AWS_ROLE_ARN"        "${OIDC_ROLE_ARN}"  false true
-
-  set_kubernetes_project_variables
-  create_and_distribute_trigger_token
 
   echo
   echo "========================================"
@@ -766,32 +572,6 @@ bootstrap_azure() {
     success "Storage container created: ${AZURE_STATE_CONTAINER}"
   fi
 
-  resolve_gitlab_ids
-  set_common_gitlab_variables
-
-  local group_vars_url="${GITLAB_URL}/api/v4/groups/${GROUP_ID}/variables"
-  upsert_var "${group_vars_url}" "ARM_USE_OIDC"        "${ARM_USE_OIDC:-false}"       false true
-  upsert_var "${group_vars_url}" "ARM_CLIENT_ID"       "${ARM_CLIENT_ID}"             false true
-  upsert_var "${group_vars_url}" "ARM_TENANT_ID"       "${ARM_TENANT_ID}"             true  true
-  upsert_var "${group_vars_url}" "ARM_SUBSCRIPTION_ID" "${ARM_SUBSCRIPTION_ID}"       true  true
-  if [[ "${ARM_USE_OIDC:-false}" != "true" ]]; then
-    upsert_var "${group_vars_url}" "ARM_CLIENT_SECRET" "${ARM_CLIENT_SECRET}"         true  true
-  else
-    warn "ARM_USE_OIDC=true; ARM_CLIENT_SECRET was not written."
-  fi
-
-  upsert_var "${group_vars_url}" "AZURE_LOCATION"              "${AZURE_LOCATION}"                false false
-  upsert_var "${group_vars_url}" "AZURE_TF_STATE_RESOURCE_GROUP" "${AZURE_STATE_RESOURCE_GROUP}"  false false
-  upsert_var "${group_vars_url}" "AZURE_TF_STATE_STORAGE_ACCOUNT" "${AZURE_STATE_STORAGE_ACCOUNT}" false false
-  upsert_var "${group_vars_url}" "AZURE_TF_STATE_CONTAINER"    "${AZURE_STATE_CONTAINER}"         false false
-
-  local infra_vars_url="${GITLAB_URL}/api/v4/projects/${PROJ_INFRASTRUCTURE_ID}/variables"
-  upsert_var "${infra_vars_url}" "TF_VAR_gitlab_project_path" "${PROJ_INFRASTRUCTURE}" false true
-  upsert_var "${infra_vars_url}" "TF_VAR_gitlab_ref"          "prod"                  false true
-
-  set_kubernetes_project_variables
-  create_and_distribute_trigger_token
-
   echo
   echo "========================================"
   echo -e "${GREEN}Azure bootstrap complete${NC}"
@@ -808,8 +588,6 @@ info "Bootstrap provider: ${CLOUD_PROVIDER}"
 info "Environment: ${ENVIRONMENT}"
 info "Project namespace: ${PROJECT_NAMESPACE}"
 
-prompt_common_inputs
-
 case "${CLOUD_PROVIDER}" in
   aws)
     bootstrap_aws
@@ -822,15 +600,10 @@ esac
 persist_inputs
 
 echo
-echo "  GitLab group variables set: $(curl -sf \
-  --header "PRIVATE-TOKEN: ${GITLAB_API_PAT}" \
-  "${GITLAB_URL}/api/v4/groups/${GROUP_ID}/variables" | jq 'length') variables"
-echo
 echo "  Next steps for ${CLOUD_PROVIDER}/${ENVIRONMENT}:"
-echo "  1. Push to infrastructure repo and run validate/plan."
-echo "  2. Manually approve apply_infrastructure after reviewing the Terraform plan."
-echo "  3. Build the utilities ci-base-${CLOUD_PROVIDER} image."
-echo "  4. Run kubernetes-infrastructure apply after the cloud foundation is ready."
-echo "  5. Push service repos to build and promote dev images."
+echo "  1. Run bootstrap-github.sh to push the values above as GitHub Actions secrets/variables."
+echo "  2. Push to the infrastructure repo and run validate/plan/apply via GitHub Actions."
+echo "  3. Run kubernetes-infrastructure apply after the cloud foundation is ready."
+echo "  4. Push service repos to build and promote dev images."
 echo
-warn "Secrets were stored in GitLab CI/CD variables and ${ENV_FILE}; protect and rotate them after the demo."
+warn "Secrets were stored in ${ENV_FILE}; protect and rotate them after the demo."
