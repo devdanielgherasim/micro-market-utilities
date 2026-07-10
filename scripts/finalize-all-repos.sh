@@ -125,7 +125,7 @@ run_finalize \
   "Multi-cloud Terraform infrastructure (AWS, Azure, GCP) for the micro-market platform" \
   "terraform,infrastructure-as-code,aws,azure,gcp,iac" \
   --environments "dev,staging,production" \
-  --environment-reviewers "staging:devdanielgherasim,production:devdanielgherasim"
+  --environment-reviewers "dev:devdanielgherasim,staging:devdanielgherasim,production:devdanielgherasim"
 
 # ---------------------------------------------------------------------------
 # 4. Kubernetes infrastructure repo (cluster-level Terraform + Helm)
