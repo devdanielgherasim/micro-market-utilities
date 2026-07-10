@@ -62,7 +62,7 @@ on:
         type: string
         default: ""
       trigger-promotion:
-        description: Set false to shadow-run this workflow without firing the deployment dispatch (used during the GitLab/GitHub parallel-run window)
+        description: Set false to shadow-run this workflow without firing the deployment dispatch
         type: boolean
         default: true
     secrets:
@@ -268,10 +268,9 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # trigger-deployment-promotion: hands the just-verified image's tag to the
-  # `deployment` repo via repository_dispatch, replacing GitLab's Pipeline
-  # Trigger API call. Gated by `trigger-promotion` so a repo can run this
-  # entire workflow in shadow mode (no dispatch fired) during the parallel-run
-  # window while GitLab's own trigger is still the one actually promoting.
+  # `deployment` repo via repository_dispatch, replacing GitLab's former
+  # Pipeline Trigger API call. Gated by `trigger-promotion` so a repo can
+  # run this entire workflow in shadow mode (no dispatch fired) if needed.
   #
   # Requires a fine-grained PAT scoped to the deployment repo's contents,
   # stored as the DEPLOYMENT_DISPATCH_PAT secret on this repo.
