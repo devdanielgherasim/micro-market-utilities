@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash 'D:\\Projects\\Microservices\\Sources\\utilities\\.codex\\hooks\\guard-secret-template.sh'",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

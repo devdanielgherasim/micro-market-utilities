@@ -22,12 +22,14 @@
 #      script's header) -- additive, merges rather than overwrites.
 #
 # What this script does NOT do (out of scope, see the migration plan):
-#   - Azure/GCP OIDC re-federation: those are Terraform-managed
+#   - Azure app-repo/GCP OIDC re-federation: those are Terraform-managed
 #     (infrastructure/terraform/{azure,gcp}/identity.tf) -- add the new
 #     azurerm_federated_identity_credential.github_ci /
-#     google_iam_workload_identity_pool_provider.github resources there
-#     instead, applied via the infrastructure repo's live GitHub Actions
-#     workflow (Phase 5; Azure is live, AWS/GCP design-complete but unapplied).
+#     google_iam_workload_identity_pool_provider.github resources there.
+#     The Azure infrastructure repo is the bootstrap exception: this script
+#     must add GitHub OIDC trust to the Terraform ARM_CLIENT_ID app first, or
+#     the infrastructure workflow cannot run `terraform init` against the
+#     Azure remote backend.
 #   - Creating the DEPLOYMENT_DISPATCH_PAT itself: GitHub has no CLI/API path
 #     to mint a fine-grained PAT non-interactively. A human must create it at
 #     https://github.com/settings/personal-access-tokens/new, scoped to ONLY
@@ -381,11 +383,84 @@ ensure_github_aws_oidc_trust() {
   AWS_ROLE_ARN="${AWS_ROLE_ARN:-${role_arn}}"
 }
 
+# -- Azure: infrastructure Terraform OIDC trust --------------------------------
+# The app-repo Azure identity is Terraform-managed and AcrPush-only. The
+# infrastructure repo is different: it runs Terraform against the Azure backend
+# and provider using ARM_CLIENT_ID from bootstrap.sh, so bootstrap-github.sh must
+# configure GitHub OIDC on that app registration before the workflow can init.
+ensure_github_azure_infra_oidc_trust() {
+  [[ "${CLOUD_PROVIDER}" == "azure" ]] || { info "CLOUD_PROVIDER=${CLOUD_PROVIDER}; skipping Azure infrastructure OIDC trust."; return; }
+  require_cmd az
+
+  : "${GITHUB_ORG:?GITHUB_ORG is required}"
+  : "${ARM_CLIENT_ID:?ARM_CLIENT_ID is required for Azure infrastructure OIDC trust}"
+
+  echo
+  echo "========================================"
+  info "Adding GitHub OIDC trust on Azure infrastructure app"
+  echo "========================================"
+
+  az ad app show --id "${ARM_CLIENT_ID}" >/dev/null \
+    || die "Azure app registration '${ARM_CLIENT_ID}' was not found. Run bootstrap.sh first."
+
+  local repo="micro-market-infrastructure"
+  local current_credentials
+  current_credentials="$(az ad app federated-credential list --id "${ARM_CLIENT_ID}" -o json)"
+
+  local names subjects
+  names=(
+    "github-${repo}-main"
+    "github-${repo}-${ENVIRONMENT}"
+  )
+  subjects=(
+    "repo:${GITHUB_ORG}/${repo}:ref:refs/heads/main"
+    "repo:${GITHUB_ORG}/${repo}:environment:${ENVIRONMENT}"
+  )
+
+  local i name subject existing_subject credential_file
+  for i in "${!names[@]}"; do
+    name="${names[$i]}"
+    subject="${subjects[$i]}"
+    existing_subject="$(echo "${current_credentials}" | jq -r --arg name "${name}" '.[] | select(.name == $name) | .subject' | head -n 1)"
+
+    if [[ "${existing_subject}" == "${subject}" ]]; then
+      success "Azure federated credential '${name}' already matches ${subject}"
+      continue
+    fi
+
+    if [[ -n "${existing_subject}" && "${existing_subject}" != "null" ]]; then
+      warn "Replacing Azure federated credential '${name}' because its subject differs."
+      az ad app federated-credential delete \
+        --id "${ARM_CLIENT_ID}" \
+        --federated-credential-id "${name}" >/dev/null
+    fi
+
+    credential_file="$(mktemp)"
+    jq -n \
+      --arg name "${name}" \
+      --arg subject "${subject}" \
+      '{
+        name: $name,
+        issuer: "https://token.actions.githubusercontent.com",
+        subject: $subject,
+        description: "GitHub Actions OIDC for micro-market-infrastructure Terraform",
+        audiences: ["api://AzureADTokenExchange"]
+      }' > "${credential_file}"
+
+    az ad app federated-credential create \
+      --id "${ARM_CLIENT_ID}" \
+      --parameters @"${credential_file}" >/dev/null
+    rm -f "${credential_file}"
+    success "Azure federated credential '${name}' added for ${subject}"
+  done
+}
+
 # -- main ------------------------------------------------------------------
 info "GitHub bootstrap (additive) for cloud provider: ${CLOUD_PROVIDER}"
 prompt_github_inputs
 resolve_azure_github_ci_client_id
 ensure_github_aws_oidc_trust
+ensure_github_azure_infra_oidc_trust
 set_base_repo_variables
 set_provider_repo_variables
 set_provider_repo_secrets
@@ -396,5 +471,5 @@ echo
 echo "========================================"
 echo -e "${GREEN}GitHub bootstrap complete${NC}"
 echo "========================================"
-echo "  Reminder: Azure/GCP GitHub OIDC trust is added via Terraform"
-echo "  (infrastructure/terraform/{azure,gcp}/identity.tf), not this script."
+echo "  Reminder: Azure app-repo/GCP GitHub OIDC trust is added via Terraform"
+echo "  (infrastructure/terraform/{azure,gcp}/identity.tf)."
