@@ -199,7 +199,7 @@ jobs:
           gcp-region: ${{ inputs.gcp-region }}
 
       - name: Download SBOM artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: sbom-${{ github.event.repository.name }}-${{ github.sha }}
 
