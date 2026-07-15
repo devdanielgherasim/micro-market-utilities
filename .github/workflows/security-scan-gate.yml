@@ -60,7 +60,7 @@ jobs:
         with:
           languages: ${{ inputs.codeql-languages }}
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         if: ${{ contains(inputs.codeql-languages, 'java') }}
         with:
           distribution: temurin
